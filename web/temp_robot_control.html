@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pet Bot Temp Control</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 20px; background: #10131a; color: #eaf0ff; }
+    .card { max-width: 520px; margin: 0 auto; background: #181f2b; padding: 16px; border-radius: 12px; }
+    .row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+    input, button, select { padding: 10px 12px; border-radius: 8px; border: 1px solid #3a455c; background: #0f1420; color: #eaf0ff; }
+    button { cursor: pointer; }
+    pre { background: #0c111b; padding: 12px; border-radius: 8px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>ESP32-CAM Robot Control (Temporary)</h2>
+    <p>Default AP from firmware: <code>PETBOT_CTRL</code> / <code>petbot123</code>.</p>
+
+    <div class="row">
+      <label for="baseUrl">Robot URL</label>
+      <input id="baseUrl" value="http://192.168.4.1" style="flex:1" />
+    </div>
+
+    <div class="row">
+      <button onclick="setMode('auto')">Auto Mode</button>
+      <button onclick="setMode('manual')">Manual Mode</button>
+      <button onclick="sendBlink()">Blink</button>
+      <button onclick="refreshStatus()">Refresh Status</button>
+    </div>
+
+    <div class="row">
+      <button onclick="move('forward')">Forward</button>
+      <button onclick="move('left')">Left</button>
+      <button onclick="move('right')">Right</button>
+      <button onclick="move('stop')">Stop</button>
+    </div>
+
+    <div class="row">
+      <select id="faceMode">
+        <option>IDLE</option>
+        <option>CURIOUS</option>
+        <option>SEARCH</option>
+        <option>HAPPY</option>
+        <option>SLEEP</option>
+      </select>
+      <button onclick="setFace()">Set Face</button>
+    </div>
+
+    <h3>Status</h3>
+    <pre id="status">(no status yet)</pre>
+  </div>
+
+  <script>
+    function base() {
+      return document.getElementById('baseUrl').value.replace(/\/$/, '');
+    }
+
+    async function callApi(path) {
+      const r = await fetch(base() + path);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.json();
+    }
+
+    async function refreshStatus() {
+      try {
+        const data = await callApi('/api/status');
+        document.getElementById('status').textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        document.getElementById('status').textContent = 'Error: ' + e.message;
+      }
+    }
+
+    async function setMode(mode) {
+      await callApi('/api/cmd?mode=' + encodeURIComponent(mode));
+      refreshStatus();
+    }
+
+    async function move(cmd) {
+      await callApi('/api/cmd?move=' + encodeURIComponent(cmd));
+      refreshStatus();
+    }
+
+    async function setFace() {
+      const face = document.getElementById('faceMode').value;
+      await callApi('/api/cmd?face=' + encodeURIComponent(face));
+      refreshStatus();
+    }
+
+    async function sendBlink() {
+      await callApi('/api/cmd?blink=1');
+      refreshStatus();
+    }
+
+    refreshStatus();
+    setInterval(refreshStatus, 3000);
+  </script>
+</body>
+</html>
