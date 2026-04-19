@@ -16,9 +16,18 @@
  */
 
 #include <Arduino.h>
-#include <WiFi.h>
-#include "esp_camera.h"
-#include "esp_http_server.h"
+
+// Build-time feature gates for fitting default ESP32-CAM app partitions.
+// Set PETBOT_ENABLE_STREAM to 1 if you use a larger app partition (e.g. Huge APP).
+#ifndef PETBOT_ENABLE_STREAM
+#define PETBOT_ENABLE_STREAM 0
+#endif
+
+#if PETBOT_ENABLE_STREAM
+    #include <WiFi.h>
+    #include "esp_camera.h"
+    #include "esp_http_server.h"
+#endif
 
 #if defined(__has_include) && __has_include(<NimBLEDevice.h>)
     #include <NimBLEDevice.h>
@@ -150,6 +159,7 @@ void playSound(const String& name) {
 // ═════════════════════════════════════════════════════════════════════════════
 //  Camera
 // ═════════════════════════════════════════════════════════════════════════════
+#if PETBOT_ENABLE_STREAM
 void setupCamera() {
     camera_config_t cfg = {};
     cfg.ledc_channel  = LEDC_CHANNEL_0;
@@ -238,6 +248,15 @@ void setupWifiAndStream() {
         Serial.println("[HTTP] /stream  /  active on port 80");
     }
 }
+#else
+void setupCamera() {
+    Serial.println("[CAM] Stream disabled at compile time (PETBOT_ENABLE_STREAM=0)");
+}
+
+void setupWifiAndStream() {
+    Serial.println("[WiFi] AP/stream disabled at compile time (PETBOT_ENABLE_STREAM=0)");
+}
+#endif
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  BLE
@@ -386,7 +405,11 @@ void handleCommand(const String& cmd) {
         s += ",screen=";  s += SCREEN_ENABLED   ? "1" : "0";
         s += ",mic=";     s += MIC_ENABLED      ? "1" : "0";
         s += ",speaker="; s += SPEAKER_ENABLED  ? "1" : "0";
+      #if PETBOT_ENABLE_STREAM
         s += ",stream=http://192.168.4.1/stream";
+      #else
+        s += ",stream=disabled";
+      #endif
         bleSend(s);
 
     } else {
@@ -412,8 +435,12 @@ void setup() {
 
     Serial.println("=== PetBot ready ===");
     Serial.println("  BLE  : connect to \"" BLE_DEVICE_NAME "\"");
+#if PETBOT_ENABLE_STREAM
     Serial.println("  WiFi : join \"" WIFI_AP_SSID "\" / " WIFI_AP_PASS);
     Serial.println("  Cam  : http://192.168.4.1/stream");
+#else
+    Serial.println("  Cam  : disabled (set PETBOT_ENABLE_STREAM=1 for AP+stream build)");
+#endif
 }
 
 void loop() {
