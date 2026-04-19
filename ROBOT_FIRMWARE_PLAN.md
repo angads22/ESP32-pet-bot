@@ -205,3 +205,167 @@ Return complete code for all files.
 - ToF obstacle handling.
 - Optional servo head motion.
 - Better tracking smoothing.
+
+---
+
+## 8) Complete Signal Pin Reference
+
+### ESP32-C6 (display board — `esp32_screen_only.ino`)
+
+| Signal | GPIO | Direction | Connected to | Notes |
+|--------|------|-----------|-------------|-------|
+| TFT MOSI | 6 | OUT | ST7789 SDA | Reserved — do not reuse |
+| TFT SCLK | 7 | OUT | ST7789 SCL | Reserved |
+| TFT CS | 14 | OUT | ST7789 CS | Reserved |
+| TFT DC | 15 | OUT | ST7789 DC | Reserved |
+| TFT RST | 21 | OUT | ST7789 RST | Reserved |
+| TFT BL | 22 | OUT | ST7789 BLK | High = backlight on |
+| Motor AIN1 | 0 | OUT | TB6612 AIN1 | Motor A direction |
+| Motor AIN2 | 1 | OUT | TB6612 AIN2 | Motor A direction |
+| Motor BIN1 | 2 | OUT | TB6612 BIN1 | Motor B direction |
+| Motor BIN2 | 3 | OUT | TB6612 BIN2 | Motor B direction |
+| Motor PWMA | 4 | OUT | TB6612 PWMA | Motor A speed (PWM) |
+| Motor PWMB | 5 | OUT | TB6612 PWMB | Motor B speed (PWM) |
+| Motor STBY | 16 | OUT | TB6612 STBY | High = driver active |
+| UART TX | 17 | OUT | CAM GPIO3 | To CAM RX |
+| UART RX | 18 | IN | CAM GPIO1 | From CAM TX |
+| I2S BCLK | 19 | OUT | MAX98357 BCLK | Bit clock |
+| I2S LRC | 20 | OUT | MAX98357 LRC | Word select / frame sync |
+| I2S DIN | 23 | OUT | MAX98357 DIN | Audio data |
+| Mic SCK* | 8 | OUT | INMP441 SCK | *Not populated yet |
+| Mic WS* | 9 | OUT | INMP441 WS | *Enable with MIC_ENABLED=1 |
+| Mic SD* | 10 | IN | INMP441 SD | *Not populated yet |
+
+### ESP32-CAM (brain board — `esp32_cam_brain.ino`, AI-Thinker module)
+
+| Signal | GPIO | Direction | Connected to | Notes |
+|--------|------|-----------|-------------|-------|
+| UART TX | 1 | OUT | C6 GPIO18 | To display RX |
+| UART RX | 3 | IN | C6 GPIO17 | From display TX |
+| Motor AIN1 | 12 | OUT | TB6612 AIN1 | Motor A direction |
+| Motor AIN2 | 13 | OUT | TB6612 AIN2 | Motor A direction |
+| Motor BIN1 | 14 | OUT | TB6612 BIN1 | Motor B direction |
+| Motor BIN2 | 15 | OUT | TB6612 BIN2 | Motor B direction |
+| Motor PWMA | 2 | OUT | TB6612 PWMA | Also used for SD card; avoid SD if using PWM |
+| Motor PWMB | 4 | OUT | TB6612 PWMB | Also: onboard flash LED |
+| Cam PWDN | 32 | OUT | OV2640 PWDN | Camera power-down |
+| Cam XCLK | 0 | OUT | OV2640 XCLK | 20 MHz clock |
+| Cam SIOD | 26 | I/O | OV2640 SDA | SCCB data |
+| Cam SIOC | 27 | OUT | OV2640 SCL | SCCB clock |
+| Cam D7–D0 | 35,34,39,36,21,19,18,5 | IN | OV2640 data | 8-bit parallel data |
+| Cam VSYNC | 25 | IN | OV2640 VSYNC | Frame sync |
+| Cam HREF | 23 | IN | OV2640 HREF | Line valid |
+| Cam PCLK | 22 | IN | OV2640 PCLK | Pixel clock |
+
+---
+
+## 9) Drawing a Custom Face
+
+All face drawing lives in `firmware/esp32_screen_only.ino` inside `renderFace()`.
+The screen is **172 px wide × 320 px tall** (portrait native; `setRotation(1)` makes it landscape 320×172).
+
+### Coordinate system after `setRotation(1)`
+```
+(0,0) ─────────────────────────── (319,0)
+  │         SCREEN_W = 172                │   ← these are swapped by rotation
+  │         SCREEN_H = 320                │
+(0,171) ──────────────────────── (319,171)
+```
+Centred helpers: `SCREEN_W / 2 = 86`  `SCREEN_H / 2 = 160`
+
+### Eye placement
+```cpp
+const int leftX  = SCREEN_W / 2 - 40;  // 46
+const int rightX = SCREEN_W / 2 + 40;  // 126
+const int eyeY   = SCREEN_H / 2 - 20;  // 140
+```
+
+### Primitive toolkit
+| Function | What it draws |
+|----------|--------------|
+| `tft.fillRoundRect(x, y, w, h, r, color)` | Rounded rectangle (use for eyes, eyebrows) |
+| `tft.fillCircle(cx, cy, r, color)` | Filled circle (pupils, cheeks) |
+| `tft.drawCircle(cx, cy, r, color)` | Circle outline (round mouth) |
+| `tft.drawLine(x0,y0, x1,y1, color)` | Angled line (smile, frown) |
+| `tft.fillTriangle(x0,y0, x1,y1, x2,y2, color)` | Triangle (open mouth, fangs) |
+| `tft.drawFastHLine(x, y, len, color)` | Horizontal line (mouth baseline) |
+| `tft.fillScreen(color)` | Background colour |
+
+### Step-by-step example: add pupils
+```cpp
+// After drawing white eye rectangles:
+if (!blinkActive && currentMode != FaceMode::SLEEP) {
+    tft.fillCircle(leftX,  eyeY, 8, ST77XX_BLACK);  // left pupil
+    tft.fillCircle(rightX, eyeY, 8, ST77XX_BLACK);  // right pupil
+}
+```
+
+### Step-by-step example: curved smile for HAPPY
+```cpp
+// Replace the HAPPY mouth drawFastHLine calls with:
+tft.drawCircle(SCREEN_W / 2, mouthY - 10, 18, ST77XX_WHITE);
+// Then black out the top half so only the bottom arc shows:
+tft.fillRect(SCREEN_W / 2 - 20, mouthY - 28, 40, 20, bgForMode(currentMode));
+```
+
+### Blink rule
+When `blinkActive == true`, always reduce `eyeH` to ≤ 4 px (or 3 px for exaggerated blink).
+The eye width can stay the same — only the height collapses.
+
+### Per-expression customisation
+Use a `switch (currentMode)` block inside `renderFace()`:
+```cpp
+switch (currentMode) {
+  case FaceMode::HAPPY:
+    // wider mouth, squinted eyes, rosy cheeks
+    tft.fillCircle(leftX - 14, eyeY + 20, 6, 0xF800);   // left blush
+    tft.fillCircle(rightX + 14, eyeY + 20, 6, 0xF800);  // right blush
+    break;
+  case FaceMode::SEARCH:
+    // raised single eyebrow
+    tft.fillRoundRect(rightX - 18, eyeY - 32, 36, 6, 3, ST77XX_WHITE);
+    break;
+  default: break;
+}
+```
+
+### Adding new expressions
+1. Add a new value to `enum class FaceMode` in `esp32_screen_only.ino`
+2. Handle it in `bgForMode()`, `renderFace()`, and `parseMode()`
+3. Send `FACE,NEWMODE` from `esp32_cam_brain.ino` to trigger it
+
+---
+
+## 10) Web App & BLE Setup
+
+### Requirements
+- Chrome or Edge (desktop or Android) — Web Bluetooth is **not** supported on Safari or Firefox
+- Open `web/robot_webapp.html` as a local file (`File → Open`) or serve it over HTTP
+
+### Pairing steps
+1. Flash `esp32_cam_brain.ino` to the ESP32-CAM board
+2. Power on the robot — it advertises as **"PetBot"** over BLE
+3. Open `robot_webapp.html` in Chrome → click **Connect via Bluetooth**
+4. Select **PetBot** from the browser's device picker → click **Pair**
+5. All controls (D-pad, face, TTS, sounds) are now live over BLE
+
+### Camera stream (optional)
+1. On your phone/laptop, connect to WiFi SSID **PETBOT_CTRL** (password `petbot123`)
+2. In the web app, click **Show Camera** — stream loads from `http://192.168.4.1/stream`
+3. BLE control continues to work simultaneously
+
+### BLE command reference
+```
+MOVE:fwd | back | left | right | stop
+FACE:HAPPY | IDLE | SEARCH | CURIOUS | SLEEP
+SAY:<text up to 64 chars>
+SOUND:BOOT | HAPPY | ALERT
+MODE:manual | auto
+STATUS
+```
+
+### Adding a microphone (INMP441)
+Wire the INMP441 to the ESP32-C6:
+- SCK → GPIO8   WS → GPIO9   SD → GPIO10   VDD → 3.3V   GND → GND   L/R → GND
+
+Then in `esp32_screen_only.ino` change `#define MIC_ENABLED 0` to `#define MIC_ENABLED 1` and reflash.
