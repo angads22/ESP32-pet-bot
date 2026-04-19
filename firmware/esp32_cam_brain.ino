@@ -249,6 +249,7 @@ void setupWifiAndStream() {
     }
 }
 #else
+// Intentional no-op stubs: setup() always calls these to keep one init flow.
 void setupCamera() {
     Serial.println("[CAM] Stream disabled at compile time (PETBOT_ENABLE_STREAM=0)");
 }
