@@ -262,7 +262,7 @@ class BleServerCB : public BLEServerCallbacks {
 
 class BleRxCB : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* c) override {
-        std::string v = c->getValue();
+        auto v = c->getValue();
         if (v.length()) handleCommand(String(v.c_str()));
     }
 };
