@@ -2,485 +2,379 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PetBot Control</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>PetBot</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg:       #0d1117;
-      --surface:  #161b22;
-      --border:   #30363d;
-      --accent:   #58a6ff;
-      --green:    #3fb950;
-      --red:      #f85149;
-      --orange:   #d29922;
-      --text:     #e6edf3;
-      --muted:    #8b949e;
-      --radius:   12px;
+      --bg:     #0d1117;
+      --panel:  #161b22;
+      --border: #30363d;
+      --accent: #58a6ff;
+      --green:  #3fb950;
+      --red:    #f85149;
+      --muted:  #8b949e;
+      --text:   #e6edf3;
     }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
       color: var(--text);
-      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 16px;
-      gap: 16px;
+      min-height: 100vh;
+      padding: 12px;
+      gap: 12px;
     }
 
-    h1 {
-      font-size: 1.4rem;
-      font-weight: 700;
-      letter-spacing: .02em;
-    }
-
-    /* Status bar */
-    #status-bar {
+    /* ── top bar ── */
+    header {
       width: 100%;
-      max-width: 480px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 10px 14px;
+      max-width: 520px;
       display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: 10px;
+    }
+    h1 { font-size: 1.1rem; font-weight: 600; letter-spacing: .03em; }
+
+    #connectBtn {
+      background: var(--accent);
+      color: #000;
+      border: none;
+      border-radius: 6px;
+      padding: 7px 16px;
       font-size: .85rem;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
     }
+    #connectBtn:disabled { opacity: .45; cursor: not-allowed; }
+    #connectBtn.connected { background: var(--red); color: #fff; }
 
-    #ble-dot {
-      width: 10px; height: 10px;
-      border-radius: 50%;
-      background: var(--red);
-      flex-shrink: 0;
-      transition: background .3s;
+    #bleStatus {
+      font-size: .78rem;
+      color: var(--muted);
+      white-space: nowrap;
     }
-    #ble-dot.connected { background: var(--green); }
+    #bleStatus.ok  { color: var(--green); }
+    #bleStatus.err { color: var(--red); }
 
-    #status-text { flex: 1; color: var(--muted); }
-    #robot-state { font-weight: 600; color: var(--accent); }
-
-    /* Cards */
-    .card {
+    /* ── camera panel ── */
+    #camPanel {
       width: 100%;
-      max-width: 480px;
-      background: var(--surface);
+      max-width: 520px;
+      background: #000;
       border: 1px solid var(--border);
-      border-radius: var(--radius);
+      border-radius: 10px;
+      overflow: hidden;
+      position: relative;
+    }
+    #camPanel img {
+      width: 100%;
+      display: block;
+      min-height: 180px;
+      object-fit: contain;
+    }
+    #camOverlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: rgba(0,0,0,.7);
+      font-size: .85rem;
+      color: var(--muted);
+      text-align: center;
       padding: 16px;
     }
-    .card h2 {
-      font-size: .8rem;
+    #camOverlay.hidden { display: none; }
+    #camOverlay p { line-height: 1.5; }
+    #camOverlay code {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: .82rem;
+      color: var(--accent);
+    }
+    #streamBtn {
+      background: var(--accent);
+      color: #000;
+      border: none;
+      border-radius: 6px;
+      padding: 7px 18px;
+      font-size: .84rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* ── info banner (shown before BLE connect) ── */
+    #setupNote {
+      width: 100%;
+      max-width: 520px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-size: .82rem;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    #setupNote strong { color: var(--text); }
+    #setupNote code {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+      color: var(--accent);
+    }
+    #setupNote.hidden { display: none; }
+
+    /* ── control card ── */
+    .card {
+      width: 100%;
+      max-width: 520px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .card-title {
+      font-size: .75rem;
+      font-weight: 600;
       text-transform: uppercase;
       letter-spacing: .08em;
       color: var(--muted);
       margin-bottom: 12px;
     }
 
-    /* Buttons */
-    button {
-      cursor: pointer;
-      border: none;
-      border-radius: 8px;
-      font-size: .9rem;
-      font-weight: 600;
-      padding: 10px 18px;
-      transition: opacity .15s, transform .1s;
-      user-select: none;
-      -webkit-user-select: none;
-    }
-    button:active { transform: scale(.95); }
-    button:disabled { opacity: .35; cursor: not-allowed; }
-
-    .btn-primary   { background: var(--accent); color: #000; }
-    .btn-danger    { background: var(--red);    color: #fff; }
-    .btn-neutral   { background: var(--border); color: var(--text); }
-    .btn-green     { background: var(--green);  color: #000; }
-
-    /* Connect button */
-    #connect-btn { width: 100%; max-width: 480px; padding: 12px; font-size: 1rem; }
-
-    /* D-pad */
-    .dpad {
-      display: grid;
-      grid-template-columns: repeat(3, 70px);
-      grid-template-rows: repeat(3, 70px);
-      gap: 6px;
-      justify-content: center;
-    }
-    .dpad button {
-      width: 70px; height: 70px;
-      font-size: 1.4rem;
-      border-radius: 10px;
-      background: var(--border);
-      color: var(--text);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-    }
-    .dpad button:active, .dpad button.held { background: var(--accent); color: #000; }
-    .dpad .center { background: var(--red); color: #fff; }
-    .dpad .empty  { visibility: hidden; pointer-events: none; }
-
-    /* Face grid */
-    .face-grid {
+    /* ── d-pad ── */
+    #dpad {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
+      gap: 6px;
+      max-width: 200px;
+      margin: 0 auto;
     }
-    .face-grid button {
-      padding: 10px 6px;
-      font-size: .78rem;
-      background: var(--border);
-      color: var(--text);
-      border-radius: 8px;
-    }
-    .face-grid button.active { background: var(--accent); color: #000; }
-
-    /* TTS row */
-    .tts-row {
-      display: flex;
-      gap: 8px;
-    }
-    #tts-input {
-      flex: 1;
+    #dpad button {
       background: var(--bg);
+      color: var(--text);
       border: 1px solid var(--border);
       border-radius: 8px;
-      color: var(--text);
-      font-size: .9rem;
-      padding: 10px 12px;
-      outline: none;
+      height: 52px;
+      font-size: 1.3rem;
+      cursor: pointer;
+      user-select: none;
+      touch-action: none;
+      transition: background .1s;
     }
-    #tts-input:focus { border-color: var(--accent); }
+    #dpad button:active,
+    #dpad button.held { background: var(--accent); color: #000; }
+    #dpad .empty { border: none; background: transparent; pointer-events: none; }
 
-    /* Sound buttons */
-    .sound-row {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .sound-row button { flex: 1; min-width: 80px; }
-
-    /* Mode toggle */
-    .mode-row {
-      display: flex;
-      gap: 8px;
-    }
-    .mode-row button { flex: 1; }
-    .mode-row button.active { outline: 2px solid var(--accent); }
-
-    /* Camera */
-    #cam-toggle { width: 100%; margin-bottom: 10px; }
-    #cam-frame {
-      display: none;
+    /* ── log ── */
+    #log {
       width: 100%;
+      max-width: 520px;
+      background: var(--panel);
+      border: 1px solid var(--border);
       border-radius: 8px;
-      overflow: hidden;
-      background: #000;
-    }
-    #cam-frame img { width: 100%; display: block; border-radius: 8px; }
-    #cam-note { font-size: .75rem; color: var(--orange); margin-top: 6px; }
-
-    /* Blink button full-width */
-    #blink-btn { width: 100%; }
-
-    /* Responsive */
-    @media (max-width: 360px) {
-      .dpad button { width: 60px; height: 60px; }
-      .dpad { grid-template-columns: repeat(3, 60px); grid-template-rows: repeat(3, 60px); }
+      padding: 10px 12px;
+      font-size: .75rem;
+      color: var(--muted);
+      height: 72px;
+      overflow-y: auto;
+      font-family: monospace;
     }
   </style>
 </head>
 <body>
 
-  <h1>🤖 PetBot Control</h1>
+<!-- ── header ── -->
+<header>
+  <h1>PetBot</h1>
+  <span id="bleStatus">disconnected</span>
+  <button id="connectBtn">Connect via Bluetooth</button>
+</header>
 
-  <!-- Status -->
-  <div id="status-bar">
-    <div id="ble-dot"></div>
-    <span id="status-text">Not connected</span>
-    <span id="robot-state"></span>
+<!-- ── setup instructions (hidden after connect) ── -->
+<div id="setupNote">
+  <strong>Two-step connection:</strong><br>
+  1. Join the robot's WiFi: <code>PETBOT_CAM</code> / <code>petbot123</code> — this enables the camera stream.<br>
+  2. Click <strong>Connect via Bluetooth</strong> above — this enables controls.
+  <br><br>
+  <em>Note: Web Bluetooth requires Chrome or Edge on desktop/Android. iOS is not supported.</em>
+</div>
+
+<!-- ── camera feed ── -->
+<div id="camPanel">
+  <img id="camImg" src="" alt="camera stream" style="display:none">
+  <div id="camOverlay">
+    <p>Camera stream loads from<br><code>http://192.168.4.1/stream</code><br>after joining the robot's WiFi.</p>
+    <button id="streamBtn">Start Stream</button>
   </div>
+</div>
 
-  <!-- Connect / disconnect -->
-  <button id="connect-btn" class="btn-primary">Connect via Bluetooth</button>
+<!-- ── d-pad controls ── -->
+<div class="card">
+  <div class="card-title">Movement</div>
+  <div id="dpad">
+    <div class="empty"></div>
+    <button data-cmd="MOVE:fwd">▲</button>
+    <div class="empty"></div>
 
-  <!-- Movement D-pad -->
-  <div class="card">
-    <h2>Movement</h2>
-    <div class="dpad">
-      <div class="empty"></div>
-      <button id="btn-fwd"   data-cmd="MOVE:fwd"   title="Forward">▲</button>
-      <div class="empty"></div>
-      <button id="btn-left"  data-cmd="MOVE:left"  title="Left">◀</button>
-      <button id="btn-stop"  data-cmd="MOVE:stop"  class="center" title="Stop">■</button>
-      <button id="btn-right" data-cmd="MOVE:right" title="Right">▶</button>
-      <div class="empty"></div>
-      <button id="btn-back"  data-cmd="MOVE:back"  title="Backward">▼</button>
-      <div class="empty"></div>
-    </div>
+    <button data-cmd="MOVE:left">◀</button>
+    <button data-cmd="MOVE:stop">■</button>
+    <button data-cmd="MOVE:right">▶</button>
+
+    <div class="empty"></div>
+    <button data-cmd="MOVE:back">▼</button>
+    <div class="empty"></div>
   </div>
+</div>
 
-  <!-- Mode -->
-  <div class="card">
-    <h2>Mode</h2>
-    <div class="mode-row">
-      <button id="btn-auto"   class="btn-neutral active" onclick="setMode('auto')">🤖 Auto (AI)</button>
-      <button id="btn-manual" class="btn-neutral"        onclick="setMode('manual')">🕹 Manual</button>
-    </div>
-  </div>
+<!-- ── log ── -->
+<div id="log">— log —</div>
 
-  <!-- Face expressions -->
-  <div class="card">
-    <h2>Face Expression</h2>
-    <div class="face-grid">
-      <button onclick="setFace('IDLE')"    class="active">😐 Idle</button>
-      <button onclick="setFace('HAPPY')">😊 Happy</button>
-      <button onclick="setFace('SEARCH')">🔍 Search</button>
-      <button onclick="setFace('CURIOUS')">🤔 Curious</button>
-      <button onclick="setFace('SLEEP')">😴 Sleep</button>
-      <button id="blink-btn" onclick="sendCmd('BLINK')" class="btn-neutral">👁 Blink</button>
-    </div>
-  </div>
+<script>
+// ── BLE ─────────────────────────────────────────────────────────────────────
+const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const NUS_RX      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';  // app → bot
+const NUS_TX      = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';  // bot → app
 
-  <!-- Text-to-speech -->
-  <div class="card">
-    <h2>Speak Text</h2>
-    <div class="tts-row">
-      <input id="tts-input" type="text" maxlength="64" placeholder="Type something for the bot to say…">
-      <button class="btn-green" onclick="speakText()">🔊 Say</button>
-    </div>
-  </div>
+let bleDevice = null, rxChar = null;
 
-  <!-- Sound effects -->
-  <div class="card">
-    <h2>Sound Effects</h2>
-    <div class="sound-row">
-      <button class="btn-neutral" onclick="sendCmd('SOUND:BOOT')">🎵 Boot</button>
-      <button class="btn-neutral" onclick="sendCmd('SOUND:HAPPY')">🎉 Happy</button>
-      <button class="btn-neutral" onclick="sendCmd('SOUND:ALERT')">🔔 Alert</button>
-    </div>
-  </div>
+const connectBtn  = document.getElementById('connectBtn');
+const bleStatus   = document.getElementById('bleStatus');
+const setupNote   = document.getElementById('setupNote');
+const logEl       = document.getElementById('log');
+const camImg      = document.getElementById('camImg');
+const camOverlay  = document.getElementById('camOverlay');
+const streamBtn   = document.getElementById('streamBtn');
 
-  <!-- Camera -->
-  <div class="card">
-    <h2>Camera</h2>
-    <button id="cam-toggle" class="btn-neutral" onclick="toggleCamera()">📷 Show Camera</button>
-    <div id="cam-frame">
-      <img id="cam-img" src="" alt="Camera stream">
-    </div>
-    <p id="cam-note">Camera stream requires connecting to the PETBOT_CTRL WiFi AP and navigating to http://192.168.4.1/stream</p>
-  </div>
+function log(msg) {
+  logEl.textContent = msg;
+}
 
-  <script>
-    // -----------------------------------------------------------------------
-    // BLE Nordic UART Service UUIDs (must match firmware)
-    // -----------------------------------------------------------------------
-    const SERVICE_UUID  = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
-    const CHAR_RX_UUID  = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // we write here
-    const CHAR_TX_UUID  = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // we read notifications
+async function connect() {
+  if (bleDevice) { bleDevice.gatt.disconnect(); return; }
+  try {
+    log('Scanning for PetBot…');
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'PetBot' }],
+      optionalServices: [NUS_SERVICE]
+    });
+    bleDevice.addEventListener('gattserverdisconnected', onDisconnect);
 
-    let bleDevice    = null;
-    let rxChar       = null;
-    let isConnected  = false;
-    let currentMode  = 'auto';
-    let currentFace  = 'IDLE';
-    let camVisible   = false;
+    const server  = await bleDevice.gatt.connect();
+    const service = await server.getPrimaryService(NUS_SERVICE);
+    rxChar        = await service.getCharacteristic(NUS_RX);
 
-    const encoder = new TextEncoder();
-
-    // -----------------------------------------------------------------------
-    // UI helpers
-    // -----------------------------------------------------------------------
-    function setStatus(text, connected) {
-      document.getElementById('status-text').textContent = text;
-      document.getElementById('ble-dot').classList.toggle('connected', connected);
-    }
-
-    function setRobotState(text) {
-      document.getElementById('robot-state').textContent = text ? `[${text}]` : '';
-    }
-
-    function setConnectBtnText(text) {
-      document.getElementById('connect-btn').textContent = text;
-    }
-
-    function disableControls(disabled) {
-      document.querySelectorAll('.dpad button, .face-grid button, .tts-row button, .sound-row button, .mode-row button')
-        .forEach(b => b.disabled = disabled);
-    }
-
-    // -----------------------------------------------------------------------
-    // BLE connect / disconnect
-    // -----------------------------------------------------------------------
-    document.getElementById('connect-btn').addEventListener('click', async () => {
-      if (!navigator.bluetooth) {
-        alert('Web Bluetooth is not supported in this browser.\nUse Chrome or Edge on Android/Desktop.');
-        return;
-      }
-      if (isConnected) {
-        bleDevice && bleDevice.gatt.disconnect();
-        return;
-      }
-
-      try {
-        setStatus('Scanning…', false);
-        bleDevice = await navigator.bluetooth.requestDevice({
-          filters: [{ name: 'PetBot' }],
-          optionalServices: [SERVICE_UUID],
-        });
-
-        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
-
-        setStatus('Connecting…', false);
-        const server  = await bleDevice.gatt.connect();
-        const service = await server.getPrimaryService(SERVICE_UUID);
-
-        rxChar = await service.getCharacteristic(CHAR_RX_UUID);
-
-        const txChar = await service.getCharacteristic(CHAR_TX_UUID);
-        await txChar.startNotifications();
-        txChar.addEventListener('characteristicvaluechanged', onNotify);
-
-        isConnected = true;
-        disableControls(false);
-        setStatus(`Connected to ${bleDevice.name}`, true);
-        setConnectBtnText('Disconnect');
-
-      } catch (err) {
-        setStatus('Connection failed: ' + err.message, false);
-        disableControls(true);
-        setConnectBtnText('Connect via Bluetooth');
-      }
+    const txChar  = await service.getCharacteristic(NUS_TX);
+    await txChar.startNotifications();
+    txChar.addEventListener('characteristicvaluechanged', e => {
+      const msg = new TextDecoder().decode(e.target.value);
+      log('← ' + msg);
     });
 
-    function onDisconnected() {
-      isConnected = false;
-      rxChar      = null;
-      disableControls(true);
-      setStatus('Disconnected', false);
-      setRobotState('');
-      setConnectBtnText('Connect via Bluetooth');
-    }
+    onConnect();
+  } catch (err) {
+    log('BLE error: ' + err.message);
+    bleDevice = null;
+  }
+}
 
-    function onNotify(event) {
-      const val = new TextDecoder().decode(event.target.value).trim();
-      // STATUS:<state>,<mode>,<uptime>
-      if (val.startsWith('STATUS:')) {
-        const parts = val.substring(7).split(',');
-        if (parts[0]) setRobotState(parts[0]);
-        if (parts[1]) {
-          currentMode = parts[1];
-          document.getElementById('btn-auto').classList.toggle('active', currentMode === 'auto');
-          document.getElementById('btn-manual').classList.toggle('active', currentMode === 'manual');
-        }
-      }
-    }
+function onConnect() {
+  bleStatus.textContent = 'connected';
+  bleStatus.className   = 'ok';
+  connectBtn.textContent = 'Disconnect';
+  connectBtn.classList.add('connected');
+  setupNote.classList.add('hidden');
+  log('Connected to PetBot');
+  send('STATUS');
+}
 
-    // -----------------------------------------------------------------------
-    // Send a BLE command string
-    // -----------------------------------------------------------------------
-    async function sendCmd(cmd) {
-      if (!isConnected || !rxChar) return;
-      try {
-        await rxChar.writeValueWithoutResponse(encoder.encode(cmd));
-      } catch (e) {
-        console.warn('BLE write failed:', e);
-      }
-    }
+function onDisconnect() {
+  bleDevice = null; rxChar = null;
+  bleStatus.textContent = 'disconnected';
+  bleStatus.className   = 'err';
+  connectBtn.textContent = 'Connect via Bluetooth';
+  connectBtn.classList.remove('connected');
+  setupNote.classList.remove('hidden');
+  log('Disconnected');
+}
 
-    // -----------------------------------------------------------------------
-    // D-pad — hold to continue, release to stop
-    // -----------------------------------------------------------------------
-    let holdInterval = null;
+function send(cmd) {
+  if (!rxChar) { log('Not connected'); return; }
+  rxChar.writeValueWithoutResponse(new TextEncoder().encode(cmd))
+    .catch(e => log('Send error: ' + e.message));
+}
 
-    function startMove(cmd) {
-      sendCmd(cmd);
-      holdInterval = setInterval(() => sendCmd(cmd), 150);
-    }
+connectBtn.addEventListener('click', connect);
 
-    function stopMove() {
-      clearInterval(holdInterval);
-      holdInterval = null;
-      sendCmd('MOVE:stop');
-    }
+// ── camera stream ────────────────────────────────────────────────────────────
+let streaming = false;
 
-    document.querySelectorAll('.dpad button[data-cmd]').forEach(btn => {
-      const cmd = btn.dataset.cmd;
-      const isStop = cmd === 'MOVE:stop';
+function startStream() {
+  const url = 'http://192.168.4.1/stream';
+  camImg.src = url;
+  camImg.style.display = 'block';
+  camOverlay.classList.add('hidden');
+  streaming = true;
+  streamBtn.textContent = 'Stop Stream';
 
-      // touch
-      btn.addEventListener('touchstart', e => { e.preventDefault(); isStop ? sendCmd(cmd) : startMove(cmd); btn.classList.add('held'); });
-      btn.addEventListener('touchend',   e => { e.preventDefault(); if (!isStop) stopMove(); btn.classList.remove('held'); });
+  camImg.onerror = () => {
+    if (!streaming) return;
+    camImg.style.display = 'none';
+    camOverlay.classList.remove('hidden');
+    camOverlay.querySelector('p').textContent =
+      'Stream unavailable — make sure you are joined to PETBOT_CAM WiFi.';
+    streamBtn.textContent = 'Retry';
+    streaming = false;
+  };
+}
 
-      // mouse
-      btn.addEventListener('mousedown', () => { isStop ? sendCmd(cmd) : startMove(cmd); btn.classList.add('held'); });
-      btn.addEventListener('mouseup',   () => { if (!isStop) stopMove(); btn.classList.remove('held'); });
-      btn.addEventListener('mouseleave',() => { if (!isStop && holdInterval) stopMove(); btn.classList.remove('held'); });
-    });
+function stopStream() {
+  streaming = false;
+  camImg.src = '';
+  camImg.style.display = 'none';
+  camOverlay.classList.remove('hidden');
+  camOverlay.querySelector('p').innerHTML =
+    'Camera stream loads from<br><code>http://192.168.4.1/stream</code><br>after joining the robot\'s WiFi.';
+  streamBtn.textContent = 'Start Stream';
+}
 
-    // -----------------------------------------------------------------------
-    // Face control
-    // -----------------------------------------------------------------------
-    function setFace(mode) {
-      currentFace = mode;
-      sendCmd('FACE:' + mode);
-      document.querySelectorAll('.face-grid button:not(#blink-btn)').forEach(b => b.classList.remove('active'));
-      event.target.classList.add('active');
-    }
+streamBtn.addEventListener('click', () => streaming ? stopStream() : startStream());
 
-    // -----------------------------------------------------------------------
-    // Mode toggle
-    // -----------------------------------------------------------------------
-    function setMode(mode) {
-      currentMode = mode;
-      sendCmd('MODE:' + mode);
-      document.getElementById('btn-auto').classList.toggle('active', mode === 'auto');
-      document.getElementById('btn-manual').classList.toggle('active', mode === 'manual');
-    }
+// ── d-pad (hold-to-repeat) ───────────────────────────────────────────────────
+let holdTimer = null;
 
-    // -----------------------------------------------------------------------
-    // TTS
-    // -----------------------------------------------------------------------
-    function speakText() {
-      const text = document.getElementById('tts-input').value.trim();
-      if (!text) return;
-      sendCmd('SAY:' + text.substring(0, 64));
-    }
+function startHold(cmd) {
+  send(cmd);
+  holdTimer = setInterval(() => send(cmd), 150);
+}
+function endHold() {
+  clearInterval(holdTimer);
+  holdTimer = null;
+  send('MOVE:stop');
+}
 
-    document.getElementById('tts-input').addEventListener('keydown', e => {
-      if (e.key === 'Enter') speakText();
-    });
+document.querySelectorAll('#dpad button[data-cmd]').forEach(btn => {
+  const cmd = btn.dataset.cmd;
 
-    // -----------------------------------------------------------------------
-    // Camera toggle
-    // -----------------------------------------------------------------------
-    function toggleCamera() {
-      camVisible = !camVisible;
-      const frame  = document.getElementById('cam-frame');
-      const img    = document.getElementById('cam-img');
-      const btn    = document.getElementById('cam-toggle');
-      if (camVisible) {
-        img.src    = 'http://192.168.4.1/stream';
-        frame.style.display = 'block';
-        btn.textContent = '📷 Hide Camera';
-      } else {
-        img.src    = '';
-        frame.style.display = 'none';
-        btn.textContent = '📷 Show Camera';
-      }
-    }
+  btn.addEventListener('mousedown',  () => { btn.classList.add('held');    startHold(cmd); });
+  btn.addEventListener('touchstart', (e) => { e.preventDefault(); btn.classList.add('held'); startHold(cmd); }, { passive: false });
 
-    // -----------------------------------------------------------------------
-    // Init — disable controls until BLE is connected
-    // -----------------------------------------------------------------------
-    disableControls(true);
-  </script>
+  ['mouseup','mouseleave','touchend','touchcancel'].forEach(ev =>
+    btn.addEventListener(ev, () => { btn.classList.remove('held'); endHold(); })
+  );
+});
+</script>
 </body>
 </html>
