@@ -20,15 +20,15 @@
 #include "esp_camera.h"
 #include "esp_http_server.h"
 
-#if __has_include(<NimBLEDevice.h>)
-  #include <NimBLEDevice.h>
-  #define PETBOT_USE_NIMBLE 1
+#if defined(__has_include) && __has_include(<NimBLEDevice.h>)
+    #include <NimBLEDevice.h>
+    #define PETBOT_USE_NIMBLE 1
 #else
-  #include <BLEDevice.h>
-  #include <BLEServer.h>
-  #include <BLEUtils.h>
-  #include <BLE2902.h>
-  #define PETBOT_USE_NIMBLE 0
+    #include <BLEDevice.h>
+    #include <BLEServer.h>
+    #include <BLEUtils.h>
+    #include <BLE2902.h>
+    #define PETBOT_USE_NIMBLE 0
 #endif
 
 // ─── Identity ────────────────────────────────────────────────────────────────
@@ -282,8 +282,8 @@ class BleServerCB : public NimBLEServerCallbacks {
 
 class BleRxCB : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* c) override {
-        auto v = c->getValue();
-        if (v.length()) handleCommand(String(v.c_str()));
+        auto value = c->getValue();
+        if (value.length()) handleCommand(String(value.c_str()));
     }
 };
 #else
@@ -302,8 +302,8 @@ class BleServerCB : public BLEServerCallbacks {
 
 class BleRxCB : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* c) override {
-        auto v = c->getValue();
-        if (v.length()) handleCommand(String(v.c_str()));
+        auto value = c->getValue();
+        if (value.length()) handleCommand(String(value.c_str()));
     }
 };
 #endif
@@ -333,6 +333,7 @@ void setupBLE() {
 
     pBleNotify = svc->createCharacteristic(NUS_TX_UUID, txProps);
 #if !PETBOT_USE_NIMBLE
+    // Classic BLE needs an explicit CCCD descriptor for client notifications.
     pBleNotify->addDescriptor(new BLE2902());
 #endif
 
