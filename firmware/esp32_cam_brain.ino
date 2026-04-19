@@ -24,9 +24,9 @@
 #endif
 
 #if PETBOT_ENABLE_STREAM
-    #include <WiFi.h>
-    #include "esp_camera.h"
-    #include "esp_http_server.h"
+#include <WiFi.h>
+#include "esp_camera.h"
+#include "esp_http_server.h"
 #endif
 
 #if defined(__has_include) && __has_include(<NimBLEDevice.h>)
@@ -44,6 +44,7 @@
 #define BLE_DEVICE_NAME  "PetBot"
 #define WIFI_AP_SSID     "PETBOT_CAM"
 #define WIFI_AP_PASS     "petbot123"
+#define WIFI_AP_IP       "192.168.4.1"
 
 // ─── BLE Nordic UART Service UUIDs ───────────────────────────────────────────
 #define NUS_SERVICE_UUID "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -407,7 +408,7 @@ void handleCommand(const String& cmd) {
         s += ",mic=";     s += MIC_ENABLED      ? "1" : "0";
         s += ",speaker="; s += SPEAKER_ENABLED  ? "1" : "0";
       #if PETBOT_ENABLE_STREAM
-        s += ",stream=http://192.168.4.1/stream";
+        s += ",stream=http://" WIFI_AP_IP "/stream";
       #else
         s += ",stream=disabled";
       #endif
@@ -438,7 +439,7 @@ void setup() {
     Serial.println("  BLE  : connect to \"" BLE_DEVICE_NAME "\"");
 #if PETBOT_ENABLE_STREAM
     Serial.println("  WiFi : join \"" WIFI_AP_SSID "\" / " WIFI_AP_PASS);
-    Serial.println("  Cam  : http://192.168.4.1/stream");
+    Serial.println("  Cam  : http://" WIFI_AP_IP "/stream");
 #else
     Serial.println("  Cam  : disabled (compile with -DPETBOT_ENABLE_STREAM=1 for AP+stream build)");
 #endif
