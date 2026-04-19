@@ -16,13 +16,20 @@
  */
 
 #include <Arduino.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
 #include <WiFi.h>
 #include "esp_camera.h"
 #include "esp_http_server.h"
+
+#if defined(__has_include) && __has_include(<NimBLEDevice.h>)
+    #include <NimBLEDevice.h>
+    #define PETBOT_USE_NIMBLE 1
+#else
+    #include <BLEDevice.h>
+    #include <BLEServer.h>
+    #include <BLEUtils.h>
+    #include <BLE2902.h>
+    #define PETBOT_USE_NIMBLE 0
+#endif
 
 // ─── Identity ────────────────────────────────────────────────────────────────
 #define BLE_DEVICE_NAME  "PetBot"
@@ -235,9 +242,21 @@ void setupWifiAndStream() {
 // ═════════════════════════════════════════════════════════════════════════════
 //  BLE
 // ═════════════════════════════════════════════════════════════════════════════
-BLEServer*          pBleServer = nullptr;
-BLECharacteristic*  pBleNotify = nullptr;
-bool                bleConnected = false;
+#if PETBOT_USE_NIMBLE
+using PetBleServer         = NimBLEServer;
+using PetBleService        = NimBLEService;
+using PetBleCharacteristic = NimBLECharacteristic;
+using PetBleAdvertising    = NimBLEAdvertising;
+#else
+using PetBleServer         = BLEServer;
+using PetBleService        = BLEService;
+using PetBleCharacteristic = BLECharacteristic;
+using PetBleAdvertising    = BLEAdvertising;
+#endif
+
+PetBleServer*         pBleServer = nullptr;
+PetBleCharacteristic* pBleNotify = nullptr;
+bool                  bleConnected = false;
 
 void bleSend(const String& msg) {
     if (!bleConnected || !pBleNotify) return;
@@ -247,6 +266,27 @@ void bleSend(const String& msg) {
 
 void handleCommand(const String& cmd);  // forward declaration
 
+#if PETBOT_USE_NIMBLE
+class BleServerCB : public NimBLEServerCallbacks {
+    void onConnect(NimBLEServer*) override {
+        bleConnected = true;
+        Serial.println("[BLE] Client connected");
+        bleSend("READY:PetBot");
+    }
+    void onDisconnect(NimBLEServer*) override {
+        bleConnected = false;
+        Serial.println("[BLE] Client disconnected — restarting advertising");
+        NimBLEDevice::startAdvertising();
+    }
+};
+
+class BleRxCB : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* c) override {
+        auto value = c->getValue();
+        if (value.length()) handleCommand(String(value.c_str()));
+    }
+};
+#else
 class BleServerCB : public BLEServerCallbacks {
     void onConnect(BLEServer*) override {
         bleConnected = true;
@@ -262,32 +302,54 @@ class BleServerCB : public BLEServerCallbacks {
 
 class BleRxCB : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* c) override {
-        auto v = c->getValue();
-        if (v.length()) handleCommand(String(v.c_str()));
+        auto value = c->getValue();
+        if (value.length()) handleCommand(String(value.c_str()));
     }
 };
+#endif
 
 void setupBLE() {
+  #if PETBOT_USE_NIMBLE
+    NimBLEDevice::init(BLE_DEVICE_NAME);
+    pBleServer = NimBLEDevice::createServer();
+  #else
     BLEDevice::init(BLE_DEVICE_NAME);
     pBleServer = BLEDevice::createServer();
+  #endif
     pBleServer->setCallbacks(new BleServerCB());
 
-    BLEService* svc = pBleServer->createService(NUS_SERVICE_UUID);
+    PetBleService* svc = pBleServer->createService(NUS_SERVICE_UUID);
 
-    BLECharacteristic* rx = svc->createCharacteristic(
-        NUS_RX_UUID,
-        BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
+  #if PETBOT_USE_NIMBLE
+    const uint32_t rxProps = NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR;
+    const uint32_t txProps = NIMBLE_PROPERTY::NOTIFY;
+  #else
+    const uint32_t rxProps = BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR;
+    const uint32_t txProps = BLECharacteristic::PROPERTY_NOTIFY;
+  #endif
+
+    PetBleCharacteristic* rx = svc->createCharacteristic(NUS_RX_UUID, rxProps);
     rx->setCallbacks(new BleRxCB());
 
-    pBleNotify = svc->createCharacteristic(
-        NUS_TX_UUID, BLECharacteristic::PROPERTY_NOTIFY);
+    pBleNotify = svc->createCharacteristic(NUS_TX_UUID, txProps);
+#if !PETBOT_USE_NIMBLE
+    // Classic BLE needs an explicit CCCD descriptor for client notifications.
     pBleNotify->addDescriptor(new BLE2902());
+#endif
 
     svc->start();
-    BLEAdvertising* adv = BLEDevice::getAdvertising();
+  #if PETBOT_USE_NIMBLE
+    PetBleAdvertising* adv = NimBLEDevice::getAdvertising();
+  #else
+    PetBleAdvertising* adv = BLEDevice::getAdvertising();
+  #endif
     adv->addServiceUUID(NUS_SERVICE_UUID);
     adv->setScanResponse(true);
+  #if PETBOT_USE_NIMBLE
+    NimBLEDevice::startAdvertising();
+  #else
     BLEDevice::startAdvertising();
+  #endif
     Serial.println("[BLE] Advertising as \"" BLE_DEVICE_NAME "\"");
 }
 
