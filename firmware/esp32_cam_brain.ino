@@ -321,11 +321,11 @@ void setupBLE() {
     PetBleService* svc = pBleServer->createService(NUS_SERVICE_UUID);
 
   #if PETBOT_USE_NIMBLE
-    const auto rxProps = NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR;
-    const auto txProps = NIMBLE_PROPERTY::NOTIFY;
+    const uint32_t rxProps = NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR;
+    const uint32_t txProps = NIMBLE_PROPERTY::NOTIFY;
   #else
-    const auto rxProps = BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR;
-    const auto txProps = BLECharacteristic::PROPERTY_NOTIFY;
+    const uint32_t rxProps = BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR;
+    const uint32_t txProps = BLECharacteristic::PROPERTY_NOTIFY;
   #endif
 
     PetBleCharacteristic* rx = svc->createCharacteristic(NUS_RX_UUID, rxProps);
