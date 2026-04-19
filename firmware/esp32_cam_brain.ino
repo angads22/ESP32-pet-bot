@@ -18,7 +18,7 @@
 #include <Arduino.h>
 
 // Build-time feature gates for fitting default ESP32-CAM app partitions.
-// Set PETBOT_ENABLE_STREAM to 1 if you use a larger app partition (e.g. Huge APP).
+// Compile with -DPETBOT_ENABLE_STREAM=1 if you use a larger app partition (e.g. Huge APP).
 #ifndef PETBOT_ENABLE_STREAM
 #define PETBOT_ENABLE_STREAM 0
 #endif
@@ -439,7 +439,7 @@ void setup() {
     Serial.println("  WiFi : join \"" WIFI_AP_SSID "\" / " WIFI_AP_PASS);
     Serial.println("  Cam  : http://192.168.4.1/stream");
 #else
-    Serial.println("  Cam  : disabled (set PETBOT_ENABLE_STREAM=1 for AP+stream build)");
+    Serial.println("  Cam  : disabled (compile with -DPETBOT_ENABLE_STREAM=1 for AP+stream build)");
 #endif
 }
 
