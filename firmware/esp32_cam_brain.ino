@@ -367,8 +367,10 @@ void setupBLE() {
     adv->addServiceUUID(NUS_SERVICE_UUID);
     adv->setScanResponse(true);
   #if PETBOT_USE_NIMBLE
+    adv->setName(BLE_DEVICE_NAME);
     NimBLEDevice::startAdvertising();
   #else
+    adv->setLocalName(BLE_DEVICE_NAME);
     BLEDevice::startAdvertising();
   #endif
     Serial.println("[BLE] Advertising as \"" BLE_DEVICE_NAME "\"");
