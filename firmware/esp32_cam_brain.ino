@@ -31,7 +31,7 @@
 #define PETBOT_ENABLE_STREAM 0
 #endif
 #ifndef PETBOT_ENABLE_WIFI
-#define PETBOT_ENABLE_WIFI PETBOT_ENABLE_STREAM  // stream always needs WiFi
+#define PETBOT_ENABLE_WIFI 1  // set 0 to disable WiFi captive portal
 #endif
 
 #if PETBOT_ENABLE_WIFI
