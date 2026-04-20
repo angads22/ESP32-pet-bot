@@ -31,8 +31,8 @@
 #define PETBOT_ENABLE_STREAM 0
 #endif
 #ifndef PETBOT_ENABLE_WIFI
-#define PETBOT_ENABLE_WIFI 1  // set 0 to disable WiFi captive portal
-#endif
+#define PETBOT_ENABLE_WIFI 0  // set 1 for iPad captive portal — ALSO change partition to
+#endif                        // Tools → Partition Scheme → Huge APP (3MB No OTA) first!
 
 #if PETBOT_ENABLE_WIFI
 #include <WiFi.h>
