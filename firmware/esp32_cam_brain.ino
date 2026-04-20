@@ -2,26 +2,32 @@
  * PetBot — ESP32-CAM firmware
  *
  * Board  : AI-Thinker ESP32-CAM (OV2640)
- * Control: BLE Nordic UART Service + WiFi captive portal
+ * Control: BLE (desktop/Android) + WiFi web UI (any browser on same network)
  *
- * ── iPAD / iPHONE ────────────────────────────────────────────────────────────
- *  Compile with -DPETBOT_ENABLE_WIFI=1  (default partition is fine)
- *  1. Flash and power on the ESP32.
- *  2. On iPad go to Settings → Wi-Fi → join "PETBOT_CAM" (password: petbot123).
- *  3. iOS detects the captive portal and opens the control page automatically.
- *  That's it — no app, no URL to type.
+ * ── FIRST-TIME WIFI SETUP ────────────────────────────────────────────────────
+ *  Compile with -DPETBOT_ENABLE_WIFI=1 + "Huge APP (3MB No OTA)" partition.
+ *  1. Flash and power on. ESP32 broadcasts "PETBOT_SETUP" hotspot.
+ *  2. Connect to "PETBOT_SETUP" — config page opens automatically.
+ *  3. Enter your home WiFi credentials and save.
+ *  4. ESP32 connects to your network and is reachable at http://petbot.local
+ *     from any phone, tablet, or computer on the same network.
+ *  Credentials are saved to flash — subsequent boots connect automatically.
  *
- * ── DESKTOP / ANDROID ────────────────────────────────────────────────────────
- *  Default build (no extra flags). Open web/robot_webapp.html in Chrome or
- *  Edge, click Connect, select PetBot from the Bluetooth picker.
+ * ── DESKTOP / ANDROID (BLE) ──────────────────────────────────────────────────
+ *  Default build (no flags, default partition). Connect to "PetBot" in
+ *  Chrome or Edge via the BLE web app.
+ *
+ * ── RESET WIFI CREDENTIALS ───────────────────────────────────────────────────
+ *  Hold GPIO 0 low for 3 s at boot to erase saved credentials and re-enter
+ *  setup mode.
  *
  * ── CAMERA STREAM ─────────────────────────────────────────────────────────────
- *  Add -DPETBOT_ENABLE_STREAM=1 + "Huge APP (3MB)" partition scheme.
- *  Stream available at http://192.168.4.1/stream after joining PETBOT_CAM.
+ *  Add -DPETBOT_ENABLE_STREAM=1 (also requires PETBOT_ENABLE_WIFI=1 and
+ *  Huge APP partition). Stream at http://petbot.local/stream
  *
  * ── ADD YOUR HARDWARE ─────────────────────────────────────────────────────────
- *  Search for the four STUB sections. Set the matching #define to 1 and fill
- *  the TODO bodies to wire in SCREEN, MOTORS, MIC, or SPEAKER.
+ *  Find the four STUB sections below. Set the matching #define to 1 and
+ *  fill the TODO bodies to wire in SCREEN, MOTORS, MIC, or SPEAKER.
  */
 
 #include <Arduino.h>
@@ -31,12 +37,14 @@
 #define PETBOT_ENABLE_STREAM 0
 #endif
 #ifndef PETBOT_ENABLE_WIFI
-#define PETBOT_ENABLE_WIFI 0  // set 1 for iPad captive portal — ALSO change partition to
-#endif                        // Tools → Partition Scheme → Huge APP (3MB No OTA) first!
+// WiFi needs "Huge APP (3MB No OTA)" partition — see instructions above
+#define PETBOT_ENABLE_WIFI PETBOT_ENABLE_STREAM
+#endif
 
 #if PETBOT_ENABLE_WIFI
 #include <WiFi.h>
-#include <DNSServer.h>
+#include <WiFiManager.h>     // install: Library Manager → "WiFiManager" by tzapu
+#include <ESPmDNS.h>
 #include "esp_http_server.h"
 #endif
 #if PETBOT_ENABLE_STREAM
@@ -56,15 +64,15 @@
 #endif
 
 // ─── Identity ─────────────────────────────────────────────────────────────────
-#define BLE_DEVICE_NAME  "PetBot"
-#define WIFI_AP_SSID     "PETBOT_CAM"
-#define WIFI_AP_PASS     "petbot123"
-#define WIFI_AP_IP       "192.168.4.1"
+#define BLE_DEVICE_NAME   "PetBot"
+#define WIFI_SETUP_SSID   "PETBOT_SETUP"
+#define WIFI_SETUP_PASS   "petbot123"
+#define MDNS_NAME         "petbot"       // reachable at http://petbot.local
 
 // ─── BLE Nordic UART Service UUIDs ───────────────────────────────────────────
-#define NUS_SERVICE_UUID "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
-#define NUS_RX_UUID      "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"  // app → bot
-#define NUS_TX_UUID      "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"  // bot → app
+#define NUS_SERVICE_UUID  "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+#define NUS_RX_UUID       "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
+#define NUS_TX_UUID       "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 
 // ─── Camera pins (AI-Thinker ESP32-CAM) ──────────────────────────────────────
 #define CAM_PWDN   32
@@ -90,13 +98,8 @@
 #define SCREEN_ENABLED 0
 // #include <TFT_eSPI.h>
 // TFT_eSPI tft;
-
-void setupScreen() {
-    // TODO: tft.init(); tft.setRotation(1); tft.fillScreen(TFT_BLACK);
-}
-void screenShow(const String& msg) {
-    // TODO: tft.fillScreen(TFT_BLACK); tft.setCursor(10,10); tft.print(msg);
-}
+void setupScreen()              { /* TODO: tft.init(); tft.setRotation(1); */ }
+void screenShow(const String& m){ /* TODO: tft.fillScreen(0); tft.print(m); */ }
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  STUB: MOTORS — set MOTORS_ENABLED 1, define pins, fill the TODOs
@@ -106,8 +109,7 @@ void screenShow(const String& msg) {
 // #define M_AIN2 13
 // #define M_BIN1 14
 // #define M_BIN2 15
-
-void setupMotors()   { /* TODO: pinMode + ledcSetup */ }
+void setupMotors()   { /* TODO */ }
 void motorsForward() { /* TODO */ }
 void motorsBack()    { /* TODO */ }
 void motorsLeft()    { /* TODO */ }
@@ -121,9 +123,8 @@ void motorsStop()    { /* TODO */ }
 // #define MIC_SCK 14
 // #define MIC_WS  15
 // #define MIC_SD  32
-
-void setupMic() { /* TODO: install I2S driver */ }
-String micListen() { return ""; /* TODO: read + VAD */ }
+void setupMic()      { /* TODO: install I2S driver */ }
+String micListen()   { return ""; }
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  STUB: SPEAKER — set SPEAKER_ENABLED 1, define I2S pins, fill the TODOs
@@ -132,13 +133,12 @@ String micListen() { return ""; /* TODO: read + VAD */ }
 // #define SPK_BCK  26
 // #define SPK_WS   25
 // #define SPK_DATA 33
-
 void setupSpeaker()             { /* TODO: install I2S driver */ }
 void speakText(const String& t) { Serial.print("[SPEAK] "); Serial.println(t); }
 void playSound(const String& n) { Serial.print("[SOUND] "); Serial.println(n); }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  WiFi AP + Captive Portal + Web UI
+//  WiFi — provisioning + web UI + mDNS
 // ═════════════════════════════════════════════════════════════════════════════
 #if PETBOT_ENABLE_WIFI
 
@@ -167,17 +167,9 @@ static const char WEBAPP_HTML[] =
     ".then(r=>r.text()).then(t=>document.getElementById('st').textContent=t)"
     ".catch(()=>document.getElementById('st').textContent='error')}</script></body></html>";
 
-DNSServer      dnsServer;
 httpd_handle_t webHttpd = nullptr;
 
 static esp_err_t handleWebRoot(httpd_req_t* r) {
-    httpd_resp_set_type(r, "text/html");
-    httpd_resp_sendstr(r, WEBAPP_HTML);
-    return ESP_OK;
-}
-
-// Catch-all for captive portal detection URLs (captive.apple.com, etc.)
-static esp_err_t handlePortal(httpd_req_t* r, httpd_err_code_t) {
     httpd_resp_set_type(r, "text/html");
     httpd_resp_sendstr(r, WEBAPP_HTML);
     return ESP_OK;
@@ -214,7 +206,7 @@ void setupCamera() {
     cfg.xclk_freq_hz = 20000000; cfg.pixel_format = PIXFORMAT_JPEG;
     cfg.frame_size = FRAMESIZE_QVGA; cfg.jpeg_quality = 10; cfg.fb_count = 2;
     if (esp_camera_init(&cfg) != ESP_OK)
-        Serial.println("[CAM] Init FAILED — check wiring");
+        Serial.println("[CAM] Init FAILED");
     else
         Serial.println("[CAM] OV2640 ready");
 }
@@ -239,15 +231,36 @@ static esp_err_t handleStream(httpd_req_t* req) {
 }
 #else
 void setupCamera() { Serial.println("[CAM] disabled"); }
-#endif  // PETBOT_ENABLE_STREAM
+#endif
 
-void setupWifiAndStream() {
+void setupWifi() {
 #if PETBOT_ENABLE_WIFI
-    WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASS);
-    Serial.print("[WiFi] AP IP: "); Serial.println(WiFi.softAPIP());
+    // Hold GPIO 0 low at boot to erase saved credentials
+    pinMode(0, INPUT_PULLUP);
+    if (digitalRead(0) == LOW) {
+        Serial.println("[WiFi] GPIO0 held — erasing saved credentials");
+        WiFiManager wm;
+        wm.resetSettings();
+    }
 
-    // DNS: redirect every hostname to us so iOS captive portal detection fires
-    dnsServer.start(53, "*", WiFi.softAPIP());
+    WiFiManager wm;
+    wm.setConfigPortalSSID(WIFI_SETUP_SSID);
+    wm.setConfigPortalPassword(WIFI_SETUP_PASS);
+    wm.setConfigPortalTimeout(0);  // wait forever for first-time setup
+    wm.setConnectTimeout(20);
+
+    Serial.println("[WiFi] Connecting (or starting setup portal)...");
+    if (!wm.autoConnect(WIFI_SETUP_SSID, WIFI_SETUP_PASS)) {
+        Serial.println("[WiFi] Failed — restarting");
+        ESP.restart();
+    }
+
+    Serial.print("[WiFi] Connected — IP: "); Serial.println(WiFi.localIP());
+
+    if (MDNS.begin(MDNS_NAME)) {
+        MDNS.addService("http", "tcp", 80);
+        Serial.println("[mDNS] http://" MDNS_NAME ".local");
+    }
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     if (httpd_start(&webHttpd, &cfg) == ESP_OK) {
@@ -255,18 +268,14 @@ void setupWifiAndStream() {
         httpd_uri_t cu = { "/cmd", HTTP_GET, handleCmd,     nullptr };
         httpd_register_uri_handler(webHttpd, &ru);
         httpd_register_uri_handler(webHttpd, &cu);
-        // Serve the webapp for any path iOS/Android uses for captive-portal checks
-        httpd_register_err_handler(webHttpd, HTTPD_404_NOT_FOUND, handlePortal);
   #if PETBOT_ENABLE_STREAM
         httpd_uri_t su = { "/stream", HTTP_GET, handleStream, nullptr };
         httpd_register_uri_handler(webHttpd, &su);
-        Serial.println("[HTTP] Captive portal + /cmd + /stream active");
-  #else
-        Serial.println("[HTTP] Captive portal + /cmd active");
   #endif
+        Serial.println("[HTTP] Web UI active");
     }
 #else
-    Serial.println("[WiFi] disabled — compile with -DPETBOT_ENABLE_WIFI=1 for iPad captive portal");
+    Serial.println("[WiFi] disabled — compile with -DPETBOT_ENABLE_WIFI=1 + Huge APP partition");
 #endif
 }
 
@@ -295,44 +304,36 @@ void bleSend(const String& msg) {
     pBleNotify->notify();
 }
 
-void handleCommand(const String& cmd);  // forward declaration
+void handleCommand(const String& cmd);
 
 #if PETBOT_USE_NIMBLE
 class BleServerCB : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer*) override {
-        bleConnected = true;
-        Serial.println("[BLE] connected");
-        bleSend("READY:PetBot");
+        bleConnected = true; Serial.println("[BLE] connected"); bleSend("READY:PetBot");
     }
     void onDisconnect(NimBLEServer*) override {
-        bleConnected = false;
-        Serial.println("[BLE] disconnected — restarting advertising");
+        bleConnected = false; Serial.println("[BLE] disconnected");
         NimBLEDevice::startAdvertising();
     }
 };
 class BleRxCB : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* c) override {
-        auto v = c->getValue();
-        if (v.length()) handleCommand(String(v.c_str()));
+        auto v = c->getValue(); if (v.length()) handleCommand(String(v.c_str()));
     }
 };
 #else
 class BleServerCB : public BLEServerCallbacks {
     void onConnect(BLEServer*) override {
-        bleConnected = true;
-        Serial.println("[BLE] connected");
-        bleSend("READY:PetBot");
+        bleConnected = true; Serial.println("[BLE] connected"); bleSend("READY:PetBot");
     }
     void onDisconnect(BLEServer*) override {
-        bleConnected = false;
-        Serial.println("[BLE] disconnected — restarting advertising");
+        bleConnected = false; Serial.println("[BLE] disconnected");
         pBleServer->startAdvertising();
     }
 };
 class BleRxCB : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* c) override {
-        auto v = c->getValue();
-        if (v.length()) handleCommand(String(v.c_str()));
+        auto v = c->getValue(); if (v.length()) handleCommand(String(v.c_str()));
     }
 };
 #endif
@@ -346,9 +347,7 @@ void setupBLE() {
     pBleServer = BLEDevice::createServer();
   #endif
     pBleServer->setCallbacks(new BleServerCB());
-
     PetBleService* svc = pBleServer->createService(NUS_SERVICE_UUID);
-
   #if PETBOT_USE_NIMBLE
     const uint32_t rxProps = NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR;
     const uint32_t txProps = NIMBLE_PROPERTY::NOTIFY;
@@ -356,27 +355,20 @@ void setupBLE() {
     const uint32_t rxProps = BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR;
     const uint32_t txProps = BLECharacteristic::PROPERTY_NOTIFY;
   #endif
-
     PetBleCharacteristic* rx = svc->createCharacteristic(NUS_RX_UUID, rxProps);
     rx->setCallbacks(new BleRxCB());
-
     pBleNotify = svc->createCharacteristic(NUS_TX_UUID, txProps);
   #if !PETBOT_USE_NIMBLE
     pBleNotify->addDescriptor(new BLE2902());
   #endif
-
     svc->start();
-
   #if PETBOT_USE_NIMBLE
     PetBleAdvertising* adv = NimBLEDevice::getAdvertising();
-    adv->addServiceUUID(NUS_SERVICE_UUID);
-    adv->setScanResponse(true);
-    adv->setName(BLE_DEVICE_NAME);
-    NimBLEDevice::startAdvertising();
+    adv->addServiceUUID(NUS_SERVICE_UUID); adv->setScanResponse(true);
+    adv->setName(BLE_DEVICE_NAME); NimBLEDevice::startAdvertising();
   #else
     PetBleAdvertising* adv = BLEDevice::getAdvertising();
-    adv->addServiceUUID(NUS_SERVICE_UUID);
-    adv->setScanResponse(true);
+    adv->addServiceUUID(NUS_SERVICE_UUID); adv->setScanResponse(true);
     { BLEAdvertisementData sd; sd.setName(BLE_DEVICE_NAME); adv->setScanResponseData(sd); }
     BLEDevice::startAdvertising();
   #endif
@@ -388,7 +380,6 @@ void setupBLE() {
 // ═════════════════════════════════════════════════════════════════════════════
 void handleCommand(const String& cmd) {
     Serial.print("[CMD] "); Serial.println(cmd);
-
     if (cmd.startsWith("MOVE:")) {
         String dir = cmd.substring(5);
         if      (dir == "fwd")   motorsForward();
@@ -397,33 +388,18 @@ void handleCommand(const String& cmd) {
         else if (dir == "right") motorsRight();
         else                     motorsStop();
         bleSend("OK:MOVE:" + dir);
-
-    } else if (cmd.startsWith("SAY:")) {
-        speakText(cmd.substring(4));
-        bleSend("OK:SAY");
-
-    } else if (cmd.startsWith("SOUND:")) {
-        playSound(cmd.substring(6));
-        bleSend("OK:SOUND");
-
-    } else if (cmd.startsWith("SCREEN:")) {
-        screenShow(cmd.substring(7));
-        bleSend("OK:SCREEN");
-
-    } else if (cmd == "STATUS") {
-        String s = "STATUS:ok";
-        s += ",motors=";  s += MOTORS_ENABLED  ? "1" : "0";
-        s += ",screen=";  s += SCREEN_ENABLED   ? "1" : "0";
-        s += ",mic=";     s += MIC_ENABLED      ? "1" : "0";
-        s += ",speaker="; s += SPEAKER_ENABLED  ? "1" : "0";
+    } else if (cmd.startsWith("SAY:"))    { speakText(cmd.substring(4));  bleSend("OK:SAY");    }
+      else if (cmd.startsWith("SOUND:"))  { playSound(cmd.substring(6));  bleSend("OK:SOUND");  }
+      else if (cmd.startsWith("SCREEN:")) { screenShow(cmd.substring(7)); bleSend("OK:SCREEN"); }
+      else if (cmd == "STATUS") {
+        String s = "STATUS:ok,motors=" + String(MOTORS_ENABLED) +
+                   ",screen=" + SCREEN_ENABLED + ",mic=" + MIC_ENABLED +
+                   ",speaker=" + SPEAKER_ENABLED;
       #if PETBOT_ENABLE_WIFI
-        s += ",web=http://" WIFI_AP_IP;
+        s += ",web=http://" MDNS_NAME ".local";
       #endif
         bleSend(s);
-
-    } else {
-        bleSend("ERR:unknown:" + cmd);
-    }
+    } else { bleSend("ERR:unknown:" + cmd); }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -432,27 +408,22 @@ void handleCommand(const String& cmd) {
 void setup() {
     Serial.begin(115200);
     Serial.println("\n=== PetBot booting ===");
-
     setupCamera();
-    setupWifiAndStream();
+    setupWifi();
     setupBLE();
-
     if (SCREEN_ENABLED)  setupScreen();
     if (MOTORS_ENABLED)  setupMotors();
     if (MIC_ENABLED)     setupMic();
     if (SPEAKER_ENABLED) setupSpeaker();
-
     Serial.println("=== PetBot ready ===");
+    Serial.println("  BLE : \"" BLE_DEVICE_NAME "\"  (Chrome/Edge)");
   #if PETBOT_ENABLE_WIFI
-    Serial.println("  iPad : join Wi-Fi \"" WIFI_AP_SSID "\" / " WIFI_AP_PASS " — page opens automatically");
+    Serial.print(  "  Web : http://" MDNS_NAME ".local  (");
+    Serial.print(WiFi.localIP()); Serial.println(")");
   #endif
-    Serial.println("  BLE  : connect to \"" BLE_DEVICE_NAME "\" via Chrome/Edge web app");
 }
 
 void loop() {
-  #if PETBOT_ENABLE_WIFI
-    dnsServer.processNextRequest();
-  #endif
   #if MIC_ENABLED
     String heard = micListen();
     if (heard.length()) handleCommand(heard);
