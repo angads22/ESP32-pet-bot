@@ -267,8 +267,7 @@ async function connect() {
   try {
     log('Scanning for PetBot…');
     bleDevice = await navigator.bluetooth.requestDevice({
-      filters: [{ name: 'PetBot' }],
-      optionalServices: [NUS_SERVICE]
+      filters: [{ services: [NUS_SERVICE] }]
     });
     bleDevice.addEventListener('gattserverdisconnected', onDisconnect);
 
