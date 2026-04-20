@@ -370,7 +370,7 @@ void setupBLE() {
     adv->setName(BLE_DEVICE_NAME);
     NimBLEDevice::startAdvertising();
   #else
-    adv->setLocalName(BLE_DEVICE_NAME);
+    { BLEAdvertisementData sd; sd.setName(BLE_DEVICE_NAME); adv->setScanResponseData(sd); }
     BLEDevice::startAdvertising();
   #endif
     Serial.println("[BLE] Advertising as \"" BLE_DEVICE_NAME "\"");
