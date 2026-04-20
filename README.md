@@ -1,65 +1,89 @@
 # PetBot — ESP32-CAM Firmware
 
-BLE-controlled robot with optional MJPEG camera stream. Control via the included web app over Bluetooth Low Energy.
+BLE-controlled robot with WiFi-hosted web UI and optional MJPEG camera stream.
 
 ---
 
-## Connecting to PetBot via Bluetooth
+## Build modes
 
-> **Requires:** Chrome 56+ or Edge 79+ on desktop/Android. Safari and Firefox do **not** support Web Bluetooth.
+| Mode | Compile flags | Partition scheme | Works on |
+|------|--------------|-----------------|----------|
+| **BLE only** (default) | *(none)* | Default | Desktop Chrome/Edge, Android Chrome |
+| **WiFi + Web UI** | `-DPETBOT_ENABLE_WIFI=1` | **Huge APP (3MB No OTA)** | Any device with a browser (iPad, iPhone, etc.) |
+| **WiFi + Web UI + Camera** | `-DPETBOT_ENABLE_WIFI=1 -DPETBOT_ENABLE_STREAM=1` | **Huge APP (3MB No OTA)** | Same as above |
 
-### Step 1 — Flash the firmware
+> Web Bluetooth is not supported on iOS/iPadOS. Use the WiFi build for Apple devices.
 
-1. Open `firmware/esp32_cam_brain.ino` in Arduino IDE (2.x recommended).
+---
+
+## Option A — iPad / iPhone / any browser (WiFi build)
+
+### Step 1 — Flash with WiFi enabled
+
+1. Open `firmware/esp32_cam_brain.ino` in Arduino IDE 2.x.
 2. Install board support: **Tools → Board → Boards Manager** → search `esp32` by Espressif, install ≥ 2.0.
 3. Select **Tools → Board → AI Thinker ESP32-CAM**.
-4. Connect your ESP32-CAM via a USB-UART adapter (IO0 → GND for flash mode).
-5. Click **Upload**. Remove the IO0 → GND jumper and press reset after upload completes.
+4. Set partition: **Tools → Partition Scheme → Huge APP (3MB No OTA/1MB SPIFFS)**.
+5. Add build flag: **Sketch → Export Compiled Binary** — or in `platformio.ini` add `build_flags = -DPETBOT_ENABLE_WIFI=1`.
+   - In Arduino IDE 2.x: create a `sketch.yaml` alongside the `.ino` with `build_flags: [-DPETBOT_ENABLE_WIFI=1]`
+6. Connect ESP32-CAM via USB-UART adapter (IO0 → GND for flash mode), click **Upload**.
+7. Remove IO0 jumper and press reset.
 
-> **Optional camera/stream build:** compile with `-DPETBOT_ENABLE_STREAM=1` and use the **Huge APP (3MB No OTA)** partition scheme.
+### Step 2 — Get WiFi credentials from BLE
 
-### Step 2 — Verify BLE is advertising
+The bot always advertises BLE. When you connect, it immediately sends the WiFi info.
 
-Open the Arduino Serial Monitor at **115200 baud**. You should see:
+1. Open **nRF Connect** (free on App Store / Google Play).
+2. Scan and connect to **PetBot**.
+3. Subscribe to the TX characteristic (`6E400003…`).
+4. You will receive: `WIFI:PETBOT_CAM:petbot123:http://192.168.4.1`
+
+### Step 3 — Join the hotspot and open the UI
+
+1. Go to **Settings → Wi-Fi** on your iPad and join **PETBOT_CAM** (password: `petbot123`).
+2. Open **Safari** and navigate to **http://192.168.4.1**.
+3. The PetBot control UI loads — tap the directional buttons to drive.
+
+---
+
+## Option B — Desktop / Android (BLE build)
+
+> Requires Chrome 56+ or Edge 79+. Safari and Firefox do **not** support Web Bluetooth.
+
+### Step 1 — Flash (default build, no extra flags)
+
+1–4 same as above but **keep the default partition scheme** and no extra build flags.
+
+### Step 2 — Verify BLE advertising
+
+Open Serial Monitor at **115200 baud**. You should see:
 
 ```
 === PetBot booting ===
 [BLE] Advertising as "PetBot"
 === PetBot ready ===
-  BLE  : connect to "PetBot"
 ```
 
-If you see the advertising line, the ESP32 is broadcasting correctly.
+### Step 3 — Open and connect
 
-### Step 3 — Open the web app
+1. Serve the web app locally: `python3 -m http.server 8080` from the repo root.
+2. Open **http://localhost:8080/web/robot_webapp.html** in Chrome or Edge.
+3. Click **Connect** — select PetBot from the Bluetooth picker.
 
-Open `web/robot_webapp.html` directly in Chrome or Edge (no server needed — it runs from the local file).
+---
 
-### Step 4 — Pair with PetBot
+## Commands
 
-1. Click the **Connect** button in the web app.
-2. A browser Bluetooth picker appears. Wait a few seconds for **PetBot** to appear in the list.
-3. Select **PetBot** and click **Pair**.
-4. The status bar turns green and shows **Connected**.
-
-> If "PetBot" does not appear: confirm Serial Monitor shows the advertising line, keep the phone/laptop within ~5 m, and ensure no other device is already connected (BLE NUS allows one client at a time).
-
-### Step 5 — Send commands
-
-Use the on-screen controls or type commands directly:
-
-| Button / Command | Action |
-|-----------------|--------|
-| Forward / `MOVE:fwd` | Drive forward |
-| Back / `MOVE:back` | Drive backward |
-| Left / `MOVE:left` | Turn left |
-| Right / `MOVE:right` | Turn right |
-| Stop / `MOVE:stop` | Stop motors |
+| Command | Action |
+|---------|--------|
+| `MOVE:fwd` | Drive forward |
+| `MOVE:back` | Drive backward |
+| `MOVE:left` | Turn left |
+| `MOVE:right` | Turn right |
+| `MOVE:stop` | Stop |
 | `SAY:<text>` | Speak text (requires speaker hardware) |
-| `SOUND:<name>` | Play named sound effect |
-| `STATUS` | Returns enabled-feature bitmap |
-
-The bot replies over BLE; responses appear in the app log.
+| `SOUND:<name>` | Play named sound |
+| `STATUS` | Returns feature flags |
 
 ---
 
@@ -67,17 +91,18 @@ The bot replies over BLE; responses appear in the app log.
 
 | Symptom | Fix |
 |---------|-----|
-| "PetBot" not visible in picker | Reload page, wait 10 s, check Serial Monitor for `[BLE] Advertising` |
-| Picker shows device but pairing fails | Press reset on ESP32-CAM, try again |
-| Connected but no response to commands | Check Serial Monitor for `[CMD]` lines; verify motor/speaker stubs are enabled |
-| Disconnects immediately | Reduce distance; another client may be connected |
-| Upload fails | Confirm IO0 tied to GND before powering on for flash mode |
+| nRF Connect doesn't show PetBot | Check Serial Monitor for `[BLE] Advertising`; stay within 5 m |
+| BLE connect shows no message | Subscribe to TX characteristic (`6E400003…`) before connecting |
+| http://192.168.4.1 doesn't load | Confirm iPad is on PETBOT_CAM WiFi, not your home network |
+| Web UI loads but buttons do nothing | Check Serial Monitor for `[CMD]` lines |
+| Compile error about flash size | Switch partition to **Huge APP (3MB No OTA)** in Tools menu |
+| Upload fails | Confirm IO0 tied to GND before power-on; remove jumper after upload |
 
 ---
 
 ## Hardware stubs
 
-Enable optional hardware by setting the matching `#define` to `1` in the firmware and filling the `TODO` bodies:
+Set the matching `#define` to `1` in the firmware and fill the `TODO` bodies:
 
 - `MOTORS_ENABLED` — motor driver (TB6612, DRV8833, L298N …)
 - `SCREEN_ENABLED` — SPI/I2C display

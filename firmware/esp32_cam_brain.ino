@@ -17,16 +17,22 @@
 
 #include <Arduino.h>
 
-// Build-time feature gates for fitting default ESP32-CAM app partitions.
-// Compile with -DPETBOT_ENABLE_STREAM=1 if you use a larger app partition (e.g. Huge APP).
+// Build-time feature gates — both need "Huge APP (3MB)" partition scheme in Arduino IDE.
+// -DPETBOT_ENABLE_WIFI=1   WiFi AP + web UI at http://192.168.4.1; BLE sends join info on connect
+// -DPETBOT_ENABLE_STREAM=1 also enables OV2640 camera + MJPEG /stream (implies WIFI)
 #ifndef PETBOT_ENABLE_STREAM
 #define PETBOT_ENABLE_STREAM 0
 #endif
+#ifndef PETBOT_ENABLE_WIFI
+#define PETBOT_ENABLE_WIFI PETBOT_ENABLE_STREAM
+#endif
 
-#if PETBOT_ENABLE_STREAM
+#if PETBOT_ENABLE_WIFI
 #include <WiFi.h>
-#include "esp_camera.h"
 #include "esp_http_server.h"
+#endif
+#if PETBOT_ENABLE_STREAM
+#include "esp_camera.h"
 #endif
 
 #if defined(__has_include) && __has_include(<NimBLEDevice.h>)
@@ -158,6 +164,57 @@ void playSound(const String& name) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+//  WiFi AP + Web UI
+// ═════════════════════════════════════════════════════════════════════════════
+#if PETBOT_ENABLE_WIFI
+static const char WEBAPP_HTML[] =
+    "<!DOCTYPE html><html><head>"
+    "<meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+    "<title>PetBot</title><style>*{box-sizing:border-box}"
+    "body{font-family:sans-serif;background:#1a1a2e;color:#fff;max-width:360px;margin:0 auto;padding:16px}"
+    "h1{text-align:center;color:#e94560}"
+    ".g{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}"
+    "button{background:#16213e;color:#fff;border:2px solid #e94560;border-radius:8px;"
+    "padding:14px;font-size:20px;cursor:pointer;-webkit-tap-highlight-color:transparent}"
+    "button:active{background:#e94560}.r{display:flex;gap:8px;margin-top:8px}"
+    "input{flex:1;padding:8px;background:#16213e;color:#fff;border:2px solid #e94560;border-radius:8px}"
+    "#st{padding:6px;border-radius:4px;background:#16213e;margin:8px 0;font-size:13px}"
+    "</style></head><body><h1>PetBot</h1><div id=st>Connected via WiFi</div>"
+    "<div class=g><i></i>"
+    "<button ontouchstart=\"go('MOVE:fwd')\" ontouchend=\"go('MOVE:stop')\">&#9650;</button><i></i>"
+    "<button ontouchstart=\"go('MOVE:left')\" ontouchend=\"go('MOVE:stop')\">&#9664;</button>"
+    "<button onclick=\"go('MOVE:stop')\">&#9632;</button>"
+    "<button ontouchstart=\"go('MOVE:right')\" ontouchend=\"go('MOVE:stop')\">&#9654;</button>"
+    "<i></i><button ontouchstart=\"go('MOVE:back')\" ontouchend=\"go('MOVE:stop')\">&#9660;</button>"
+    "<i></i></div><div class=r><input id=t placeholder='Type to speak...'>"
+    "<button onclick=\"go('SAY:'+document.getElementById('t').value)\">&#128263;</button>"
+    "</div><script>function go(c){fetch('/cmd?c='+encodeURIComponent(c))"
+    ".then(r=>r.text()).then(t=>document.getElementById('st').textContent=t)"
+    ".catch(()=>document.getElementById('st').textContent='error')}</script></body></html>";
+
+httpd_handle_t webHttpd = nullptr;
+
+static esp_err_t handleWebRoot(httpd_req_t* r) {
+    httpd_resp_set_type(r, "text/html");
+    httpd_resp_sendstr(r, WEBAPP_HTML);
+    return ESP_OK;
+}
+
+void handleCommand(const String&);  // defined after BLE section
+
+static esp_err_t handleCmd(httpd_req_t* r) {
+    char q[80] = {};
+    if (httpd_req_get_url_query_str(r, q, sizeof(q)) == ESP_OK) {
+        char v[64] = {};
+        if (httpd_query_key_value(q, "c", v, sizeof(v)) == ESP_OK)
+            handleCommand(String(v));
+    }
+    httpd_resp_sendstr(r, "ok");
+    return ESP_OK;
+}
+#endif
+
+// ═════════════════════════════════════════════════════════════════════════════
 //  Camera
 // ═════════════════════════════════════════════════════════════════════════════
 #if PETBOT_ENABLE_STREAM
@@ -183,7 +240,7 @@ void setupCamera() {
     cfg.pin_reset     = CAM_RESET;
     cfg.xclk_freq_hz  = 20000000;
     cfg.pixel_format  = PIXFORMAT_JPEG;
-    cfg.frame_size    = FRAMESIZE_QVGA;  // 320x240
+    cfg.frame_size    = FRAMESIZE_QVGA;
     cfg.jpeg_quality  = 10;
     cfg.fb_count      = 2;
 
@@ -193,11 +250,6 @@ void setupCamera() {
         Serial.println("[CAM] OV2640 ready");
     }
 }
-
-// ═════════════════════════════════════════════════════════════════════════════
-//  HTTP MJPEG stream server
-// ═════════════════════════════════════════════════════════════════════════════
-httpd_handle_t streamHttpd = nullptr;
 
 static esp_err_t handleStream(httpd_req_t* req) {
     camera_fb_t* fb  = nullptr;
@@ -224,41 +276,35 @@ static esp_err_t handleStream(httpd_req_t* req) {
     }
     return res;
 }
-
-static esp_err_t handleRoot(httpd_req_t* req) {
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_set_type(req, "application/json");
-    const char* json = "{\"status\":\"ok\",\"stream\":\"/stream\",\"ble\":\"PetBot\"}";
-    httpd_resp_sendstr(req, json);
-    return ESP_OK;
-}
-
-void setupWifiAndStream() {
-    WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASS);
-    Serial.print("[WiFi] AP ready — IP: ");
-    Serial.println(WiFi.softAPIP());
-
-    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.server_port = 80;
-
-    if (httpd_start(&streamHttpd, &cfg) == ESP_OK) {
-        httpd_uri_t streamUri = { "/stream", HTTP_GET, handleStream, nullptr };
-        httpd_uri_t rootUri   = { "/",       HTTP_GET, handleRoot,   nullptr };
-        httpd_register_uri_handler(streamHttpd, &streamUri);
-        httpd_register_uri_handler(streamHttpd, &rootUri);
-        Serial.println("[HTTP] /stream  /  active on port 80");
-    }
-}
 #else
-// Intentional no-op stubs: setup() always calls these to keep one init flow.
 void setupCamera() {
-    Serial.println("[CAM] Stream disabled at compile time (PETBOT_ENABLE_STREAM=0)");
-}
-
-void setupWifiAndStream() {
-    Serial.println("[WiFi] AP/stream disabled at compile time (PETBOT_ENABLE_STREAM=0)");
+    Serial.println("[CAM] disabled (compile with -DPETBOT_ENABLE_STREAM=1)");
 }
 #endif
+
+void setupWifiAP() {
+#if PETBOT_ENABLE_WIFI
+    WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASS);
+    Serial.print("[WiFi] AP ready — IP: "); Serial.println(WiFi.softAPIP());
+
+    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    if (httpd_start(&webHttpd, &cfg) == ESP_OK) {
+        httpd_uri_t ru = { "/",    HTTP_GET, handleWebRoot, nullptr };
+        httpd_uri_t cu = { "/cmd", HTTP_GET, handleCmd,     nullptr };
+        httpd_register_uri_handler(webHttpd, &ru);
+        httpd_register_uri_handler(webHttpd, &cu);
+#if PETBOT_ENABLE_STREAM
+        httpd_uri_t su = { "/stream", HTTP_GET, handleStream, nullptr };
+        httpd_register_uri_handler(webHttpd, &su);
+        Serial.println("[HTTP] http://" WIFI_AP_IP "  (/, /cmd, /stream)");
+#else
+        Serial.println("[HTTP] http://" WIFI_AP_IP "  (/, /cmd)");
+#endif
+    }
+#else
+    Serial.println("[WiFi] disabled (compile with -DPETBOT_ENABLE_WIFI=1)");
+#endif
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  BLE
@@ -292,7 +338,11 @@ class BleServerCB : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer*) override {
         bleConnected = true;
         Serial.println("[BLE] Client connected");
+#if PETBOT_ENABLE_WIFI
+        bleSend("WIFI:" WIFI_AP_SSID ":" WIFI_AP_PASS ":http://" WIFI_AP_IP);
+#else
         bleSend("READY:PetBot");
+#endif
     }
     void onDisconnect(NimBLEServer*) override {
         bleConnected = false;
@@ -312,7 +362,11 @@ class BleServerCB : public BLEServerCallbacks {
     void onConnect(BLEServer*) override {
         bleConnected = true;
         Serial.println("[BLE] Client connected");
+#if PETBOT_ENABLE_WIFI
+        bleSend("WIFI:" WIFI_AP_SSID ":" WIFI_AP_PASS ":http://" WIFI_AP_IP);
+#else
         bleSend("READY:PetBot");
+#endif
     }
     void onDisconnect(BLEServer*) override {
         bleConnected = false;
@@ -429,7 +483,7 @@ void setup() {
     Serial.println("\n=== PetBot booting ===");
 
     setupCamera();
-    setupWifiAndStream();
+    setupWifiAP();
     setupBLE();
 
     if (SCREEN_ENABLED)   setupScreen();
@@ -438,12 +492,15 @@ void setup() {
     if (SPEAKER_ENABLED)  setupSpeaker();
 
     Serial.println("=== PetBot ready ===");
-    Serial.println("  BLE  : connect to \"" BLE_DEVICE_NAME "\"");
-#if PETBOT_ENABLE_STREAM
+    Serial.println("  BLE  : connect — bot sends WiFi credentials automatically");
+#if PETBOT_ENABLE_WIFI
     Serial.println("  WiFi : join \"" WIFI_AP_SSID "\" / " WIFI_AP_PASS);
+    Serial.println("  Web  : http://" WIFI_AP_IP);
+#if PETBOT_ENABLE_STREAM
     Serial.println("  Cam  : http://" WIFI_AP_IP "/stream");
+#endif
 #else
-    Serial.println("  Cam  : disabled (compile with -DPETBOT_ENABLE_STREAM=1 for AP+stream build)");
+    Serial.println("  WiFi : disabled (compile with -DPETBOT_ENABLE_WIFI=1 + Huge APP partition)");
 #endif
 }
 
