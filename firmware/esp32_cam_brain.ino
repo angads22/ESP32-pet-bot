@@ -177,12 +177,28 @@ static esp_err_t handleWebRoot(httpd_req_t* r) {
 
 void handleCommand(const String&);  // defined after BLE section
 
+static void urlDecode(char* dst, const char* src, size_t dstSz) {
+    size_t di = 0;
+    for (size_t i = 0; src[i] && di + 1 < dstSz; i++) {
+        if (src[i] == '%' && isxdigit((uint8_t)src[i+1]) && isxdigit((uint8_t)src[i+2])) {
+            char hex[3] = {src[i+1], src[i+2], 0};
+            dst[di++] = (char)strtol(hex, nullptr, 16);
+            i += 2;
+        } else {
+            dst[di++] = (src[i] == '+') ? ' ' : src[i];
+        }
+    }
+    dst[di] = '\0';
+}
+
 static esp_err_t handleCmd(httpd_req_t* r) {
     char q[80] = {};
     if (httpd_req_get_url_query_str(r, q, sizeof(q)) == ESP_OK) {
-        char v[64] = {};
-        if (httpd_query_key_value(q, "c", v, sizeof(v)) == ESP_OK)
-            handleCommand(String(v));
+        char raw[64] = {}, dec[64] = {};
+        if (httpd_query_key_value(q, "c", raw, sizeof(raw)) == ESP_OK) {
+            urlDecode(dec, raw, sizeof(dec));
+            handleCommand(String(dec));
+        }
     }
     httpd_resp_sendstr(r, "ok");
     return ESP_OK;
@@ -235,18 +251,25 @@ void setupCamera() { Serial.println("[CAM] disabled"); }
 
 void setupWifi() {
 #if PETBOT_ENABLE_WIFI
-    // Hold GPIO 0 low at boot to erase saved credentials
+    // Hold GPIO 0 low for 3 s at boot to erase saved credentials
     pinMode(0, INPUT_PULLUP);
     if (digitalRead(0) == LOW) {
-        Serial.println("[WiFi] GPIO0 held — erasing saved credentials");
-        WiFiManager wm;
-        wm.resetSettings();
+        Serial.println("[WiFi] GPIO0 low — hold 3 s to erase credentials...");
+        unsigned long held = millis();
+        while (digitalRead(0) == LOW && millis() - held < 3000) delay(50);
+        if (millis() - held >= 3000) {
+            WiFiManager wm;
+            wm.resetSettings();
+            Serial.println("[WiFi] Credentials erased — starting setup portal");
+        } else {
+            Serial.println("[WiFi] GPIO0 released early — skipping reset");
+        }
     }
 
     WiFiManager wm;
     wm.setConfigPortalSSID(WIFI_SETUP_SSID);
     wm.setConfigPortalPassword(WIFI_SETUP_PASS);
-    wm.setConfigPortalTimeout(0);  // wait forever for first-time setup
+    wm.setConfigPortalTimeout(180);  // 3-min portal timeout; restarts if no config submitted
     wm.setConnectTimeout(20);
 
     Serial.println("[WiFi] Connecting (or starting setup portal)...");
