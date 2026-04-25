@@ -1,0 +1,8 @@
+# Partition table: Huge APP (3 MB no OTA / 1 MB SPIFFS)
+# Matches Arduino IDE "Huge APP (3MB No OTA/1MB SPIFFS)" option
+# Total flash: 4 MB (AI-Thinker ESP32-CAM)
+#
+# Name,   Type, SubType, Offset,   Size
+nvs,      data, nvs,     0x9000,   0x5000,
+app0,     app,  factory, 0x10000,  0x300000,
+spiffs,   data, spiffs,  0x310000, 0xF0000,
