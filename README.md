@@ -1,120 +1,127 @@
-# PetBot — ESP32-CAM Firmware
+# PetBot — ESP32 Firmware
 
-BLE-controlled robot with WiFi-hosted web UI and optional MJPEG camera stream.
+Two-board desktop robot: **ESP32-S3-CAM** (brain) + **ESP32-C6-LCD-1.47**
+(thin display client). The S3 owns BLE, WiFi, vision, motors, audio,
+and the big face TFT. The C6 mirrors menus / text / icons / PNGs the
+S3 sends it and reports button presses back. All phone control flows
+`phone → S3 → C6`; the C6 never sees BLE.
+
+See `ROBOT_FIRMWARE_PLAN.md` for the architecture in detail and
+`BRINGUP.md` for the end-to-end smoke-test checklist.
 
 ---
 
 ## Build modes
 
-| Mode | Compile flags | Partition scheme | Works on |
-|------|--------------|-----------------|----------|
-| **BLE only** (default) | *(none)* | Default | Desktop Chrome/Edge, Android Chrome |
-| **WiFi + Web UI** | `-DPETBOT_ENABLE_WIFI=1` | **Huge APP (3MB No OTA)** | Any device with a browser (iPad, iPhone, etc.) |
-| **WiFi + Web UI + Camera** | `-DPETBOT_ENABLE_WIFI=1 -DPETBOT_ENABLE_STREAM=1` | **Huge APP (3MB No OTA)** | Same as above |
+The repo ships two PlatformIO firmwares from one root `platformio.ini`.
 
-> Web Bluetooth is not supported on iOS/iPadOS. Use the WiFi build for Apple devices.
+| Env | Board | Source dir | Build flags | Partition | Purpose |
+|-----|-------|-----------|-------------|-----------|---------|
+| `petbot_s3` | `esp32-s3-devkitc-1` (or your S3-CAM variant) | `firmware/s3_cam_brain/src` | *(none)* | `huge_app.csv` | Brain — BLE + WiFi + vision + motors + audio + big face |
+| `petbot_s3_wifi` | same | same | `-DPETBOT_ENABLE_WIFI=1` | `huge_app.csv` | Brain with captive-portal web UI |
+| `petbot_s3_stream` | same | same | `-DPETBOT_ENABLE_WIFI=1 -DPETBOT_ENABLE_STREAM=1` | `huge_app.csv` | Brain with web UI + MJPEG stream |
+| `petbot_c6` | `esp32-c6-devkitc-1` (Waveshare ESP32-C6-LCD-1.47) | `firmware/c6_display_client/src` | *(none)* | default | Thin client — ST7789 + input only |
 
----
+Default transport is UART (`-DPB_TRANSPORT_UART=1`, on by default).
+USB-CDC (`-DPB_TRANSPORT_USBCDC=1`) is stubbed — see Task 8 in the
+working task list and the TODO block at the top of
+`transport_usbcdc.cpp`.
 
-## Option A — iPad / iPhone / any browser (WiFi build)
-
-### Step 1 — Flash with WiFi enabled
-
-**Arduino IDE 2.x:**
-
-1. Open `firmware/esp32_cam_brain.ino` in Arduino IDE 2.x.
-2. Install board support: **Tools → Board → Boards Manager** → search `esp32` by Espressif, install ≥ 2.0.
-3. Select **Tools → Board → AI Thinker ESP32-CAM**.
-4. Set partition: **Tools → Partition Scheme → Huge APP (3MB No OTA/1MB SPIFFS)**.
-5. Create a `sketch.yaml` alongside the `.ino` containing:
-   ```yaml
-   build_flags:
-     - -DPETBOT_ENABLE_WIFI=1
-   ```
-6. Connect ESP32-CAM via USB-UART adapter (IO0 → GND for flash mode), click **Upload**.
-7. Remove IO0 jumper and press reset.
-
-**PlatformIO (VS Code / CLI):**
+Build commands:
 
 ```bash
-pio run -e petbot_wifi -t upload
+pio run -e petbot_s3            # S3 brain, BLE-only
+pio run -e petbot_s3_wifi -t upload    # S3 brain, BLE + WiFi web UI
+pio run -e petbot_c6 -t upload  # C6 thin client
+pio device monitor              # serial logs
 ```
 
-The `platformio.ini` and `huge_app.csv` partition table in this repo handle everything automatically.
+Flash the C6 first, then the S3 — the S3 will start pushing frames as
+soon as it sees `PB_HELLO` from the C6 on boot.
 
 ---
 
-### Step 2 — First-time WiFi setup (captive portal)
+## Wiring (UART transport, default)
 
-On first boot (or after a credential reset) the device creates a hotspot named **PETBOT_SETUP**.
+Three wires between the boards:
 
-1. On your phone, tablet, or laptop go to **Settings → Wi-Fi** and join **PETBOT_SETUP** (password: `petbot123`).
-2. A captive-portal page opens automatically. If it doesn't, open a browser and navigate to **http://192.168.4.1**.
-3. Click **Configure WiFi**, select your home network from the list, enter the password, and click **Save**.
-4. The device connects to your home network and the portal closes. The hotspot disappears.
+| S3-CAM | C6-LCD-1.47 |
+|--------|-------------|
+| `GPIO17 (TX)` | UART RX (any free GPIO clear of the reserved display pins 6, 7, 14, 15, 21, 22) |
+| `GPIO18 (RX)` | UART TX (same caveat) |
+| `GND` | `GND` |
 
-> The portal stays open for **3 minutes**. If no credentials are submitted the device restarts and shows the hotspot again.
+UART runs at **921600 8N1**. Common ground is non-negotiable.
 
----
-
-### Step 3 — Control from any device on the same network
-
-Once connected, the device is reachable at:
-
-```
-http://petbot.local
-```
-
-from any phone, tablet, or computer on the same WiFi network. Open that URL in a browser to see the control UI with a D-pad and speak input.
-
-Credentials are saved to flash — subsequent boots connect automatically without showing the hotspot.
+For USB-CDC transport (later milestone) the S3 hosts a USB CDC port and
+the C6's default `Serial` becomes the link — see `BRINGUP.md` and the
+TODO comment in `firmware/s3_cam_brain/src/transport/transport_usbcdc.cpp`.
 
 ---
 
-### Reset WiFi credentials
+## Phone control (BLE / WiFi)
 
-Hold **GPIO 0** low for **3 seconds** during boot to erase saved credentials and re-enter setup mode. The serial monitor will confirm: `[WiFi] Credentials erased — starting setup portal`.
+### BLE — desktop / Android Chrome or Edge
 
----
+1. Flash `petbot_s3`. It advertises as **PetBot** over BLE NUS.
+2. Open `web/robot_webapp.html` in Chrome → **Connect via Bluetooth** → pick **PetBot**.
 
-## Option B — Desktop / Android (BLE build)
+> Web Bluetooth is **not** supported on iOS / iPadOS / Safari / Firefox. Use the WiFi build for Apple devices.
 
-> Requires Chrome 56+ or Edge 79+. Safari and Firefox do **not** support Web Bluetooth.
+### WiFi captive portal — any browser
 
-### Step 1 — Flash (default build, no extra flags)
+1. Flash `petbot_s3_wifi`. On first boot it raises an AP `PETBOT_SETUP` (password `petbot123`).
+2. Join the AP from your phone. Captive portal opens at `192.168.4.1`; if it doesn't, navigate manually.
+3. Pick your home WiFi, enter the password, save. The device reconnects to home WiFi.
+4. From any device on the same network: `http://petbot.local`.
 
-Steps 1–3 of Option A but keep the **default partition scheme** and omit the build flag (or use `pio run -e petbot_ble -t upload`).
+Hold **GPIO 0 low for 3 s during boot** to wipe saved credentials and re-enter the captive portal.
 
-### Step 2 — Verify BLE advertising
+### Camera stream
 
-Open Serial Monitor at **115200 baud**. You should see:
+Build with `petbot_s3_stream`. Once the device is on home WiFi, the
+MJPEG stream is at `http://petbot.local/stream`.
 
-```
-=== PetBot booting ===
-[BLE] Advertising as "PetBot"
-=== PetBot ready ===
-```
+### BLE / web command reference
 
-### Step 3 — Connect via BLE web app
-
-1. Serve the web app locally: `python3 -m http.server 8080` from the repo root.
-2. Open **http://localhost:8080/web/robot_webapp.html** in Chrome or Edge.
-3. Click **Connect** — select **PetBot** from the Bluetooth picker.
-
----
-
-## Commands
+All commands flow `phone → S3 → C6`. The S3 dispatches them; commands
+that affect the C6 surface are translated into protocol frames before
+they leave the S3.
 
 | Command | Action |
 |---------|--------|
-| `MOVE:fwd` | Drive forward |
-| `MOVE:back` | Drive backward |
-| `MOVE:left` | Turn left |
-| `MOVE:right` | Turn right |
-| `MOVE:stop` | Stop |
-| `SAY:<text>` | Speak text (requires speaker hardware) |
-| `SOUND:<name>` | Play named sound |
-| `STATUS` | Returns feature flags |
+| `MOVE:fwd` / `back` / `left` / `right` / `stop` | Drive |
+| `FACE:HAPPY` / `IDLE` / `SEARCH` / `CURIOUS` / `SLEEP` | Big-face mode + matching C6 status update |
+| `SAY:<text>` | TTS via I2S amp (when wired) |
+| `SOUND:BOOT` / `HAPPY` / `ALERT` | Built-in sound |
+| `SCREEN:<text>` | Debug: push one line of `PB_DRAW_TEXT` to the C6 |
+| `MODE:manual` / `auto` | Switch between manual control and the S3 state machine |
+| `STATUS` | Returns feature-flag report and link health |
+
+---
+
+## Reset WiFi credentials
+
+Hold **GPIO 0** low for **3 seconds** during boot to erase saved
+credentials and re-enter setup mode. The serial monitor will confirm:
+`[WiFi] Credentials erased — starting setup portal`.
+
+---
+
+## Hardware enables (S3 brain)
+
+Set the matching `#define` to `1` and fill the body in the relevant
+module to wire up real hardware. Until then the bot can BLE / web /
+stream but cannot drive, speak, or render a face:
+
+- `MOTORS_ENABLED` — motor driver (TB6612 / DRV8833 / L298N)
+- `FACE_TFT_ENABLED` — big face TFT on FSPI / SPI3_HOST
+- `MIC_ENABLED` — I2S microphone (INMP441 …)
+- `SPEAKER_ENABLED` — I2S amplifier (MAX98357A …)
+
+The C6 thin client has no such flags — it always renders whatever the
+S3 sends and always polls the BOOT button (and any extra button GPIOs
+the firmware is configured for).
 
 ---
 
@@ -122,22 +129,10 @@ Open Serial Monitor at **115200 baud**. You should see:
 
 | Symptom | Fix |
 |---------|-----|
-| PETBOT_SETUP hotspot doesn't appear | Confirm compiled with `-DPETBOT_ENABLE_WIFI=1` and **Huge APP** partition; check Serial Monitor for `[WiFi]` lines |
-| Captive portal page doesn't open automatically | Manually navigate to **http://192.168.4.1** while connected to PETBOT_SETUP |
-| Portal says "Failed to connect" after entering credentials | Double-check your home WiFi password; the device retries every restart |
-| http://petbot.local doesn't load after setup | Confirm your device is on the same home network; try the IP shown in Serial Monitor |
-| Web UI loads but buttons do nothing | Check Serial Monitor for `[CMD]` lines; confirm no firewall blocks port 80 |
-| nRF Connect doesn't show PetBot | Check Serial Monitor for `[BLE] Advertising`; stay within 5 m |
-| Compile error about flash size | Switch partition to **Huge APP (3MB No OTA)** in Tools menu (Arduino IDE) or use `petbot_wifi` env (PlatformIO) |
-| Upload fails | Confirm IO0 tied to GND before power-on; remove jumper after upload |
-
----
-
-## Hardware stubs
-
-Set the matching `#define` to `1` in the firmware and fill the `TODO` bodies:
-
-- `MOTORS_ENABLED` — motor driver (TB6612, DRV8833, L298N …)
-- `SCREEN_ENABLED` — SPI/I2C display
-- `MIC_ENABLED` — I2S microphone (INMP441 …)
-- `SPEAKER_ENABLED` — I2S amplifier (MAX98357A …)
+| C6 screen stays black on boot | Check the reserved display pins (`6, 7, 14, 15, 21, 22`) aren't reused; verify `setRotation(1)`; backlight on `GPIO22` |
+| C6 screen says "PetBot — waiting" forever | S3 isn't sending; check UART wiring (S3 GPIO17 → C6 RX, S3 GPIO18 → C6 TX, GND), confirm both at 921600 8N1, and check the S3 serial log for `PB_HELLO` reception |
+| Buttons on the C6 don't move the menu | The C6 sends `PB_BTN_EVENT`; check the S3 serial log for that frame, and that the menu controller is mapping the button id |
+| `PETBOT_SETUP` AP doesn't appear | Compiled with `-DPETBOT_ENABLE_WIFI=1`? Partition `huge_app.csv`? Check `[WiFi]` lines in serial |
+| `petbot.local` doesn't resolve | Same network as the bot? Try the IP printed in the serial log |
+| BLE picker doesn't show PetBot | Check `[BLE] Advertising` in serial; stay within ~5 m; only Chrome / Edge support Web Bluetooth |
+| Compile error about flash size on S3 | Use the `huge_app.csv` partition; `petbot_s3*` envs already do |
