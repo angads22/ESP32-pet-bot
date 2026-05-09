@@ -48,6 +48,9 @@ schematic PDF.
 | WS2812 DIN (4 LEDs) | `GPIO0` | **`GPIO48`** (suggest) | `GPIO0` collides with `CAM_XCLK`. `GPIO48` is the onboard RGB LED on many S3 dev boards — if you want the 4× WS2812 strip *and* the onboard LED, pick a different free pin. WS2812 prefers a 5 V data line; if your strip flickers from 3.3 V logic, add a 74AHCT1G125 buffer. |
 | Battery voltage ADC | `GPIO32` (same as TRIG, multiplexed) | **`GPIO1`** (suggest, ADC1_CH0) | Multiplexing TRIG with battery ADC is a Freenove hack — drop it. Use any free ADC1 pin and a 4:1 voltage divider. |
 | Servo battery V+ | n/a (just a rail) | — | 6.0–8.3 V pack to PCA9685 V+. **Do NOT connect to the S3 5 V rail.** |
+| **Head pan servo** | n/a | PCA9685 ch **11** | Free in Freenove's layout (they use 0–2, 5–10, 13–15). Standard 9 g hobby servo (e.g. MG90S). |
+| **Head tilt servo** | n/a | PCA9685 ch **12** | Same — free channel. Optional; if you want pan-only, leave ch 12 unused. |
+| **Camera mount** | OV2640 already on the S3-CAM | Mounts to head bracket | The OV2640 ribbon will twist with the head. Limit pan to **±90°** and add slack. Long term, a 30-pin FFC extension cable + a slip-ring or routed loop is the proper fix; for now, mechanical limits + a printed ribbon guide. |
 
 Suggested S3-CAM-side pin defines (to land in `firmware/s3_cam_brain/src/pin_config.h` during Phase B):
 
@@ -65,6 +68,14 @@ Suggested S3-CAM-side pin defines (to land in `firmware/s3_cam_brain/src/pin_con
 #define WS2812_DIN       48     // was Freenove GPIO0 — moved (camera XCLK conflict)
 #define WS2812_COUNT      4
 #define BATT_ADC_PIN      1     // ADC1_CH0, 4:1 divider
+
+// Head pan/tilt — extra servos on the same PCA9685
+#define HEAD_PAN_CH      11
+#define HEAD_TILT_CH     12     // -1 to disable if you want pan-only
+#define HEAD_PAN_MIN     -90    // mechanical limit, ribbon-cable-safe
+#define HEAD_PAN_MAX     +90
+#define HEAD_TILT_MIN    -30
+#define HEAD_TILT_MAX    +60
 ```
 
 ## 3. Conflict matrix
