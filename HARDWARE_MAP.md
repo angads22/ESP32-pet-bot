@@ -1,158 +1,210 @@
 # PetBot — hardware map (Phase A, blocking)
 
-This is the deliverable for **Phase A** of the own-it-overhaul plan. It
-remaps every Freenove dog-kit peripheral onto a free GPIO on the
-ESP32-S3-CAM brain, lists every conflict with the existing camera /
-face-TFT / C6-UART pin claims, and enumerates the Freenove gait API.
+Carrier and head-screen decisions are now locked:
 
-**Stop point:** review this document, fill in the open decisions at the
-bottom, then I move to Phase B (servos + IK).
+- **Brain: Freenove ESP32-S3 WROOM CAM** (ESP32-S3-WROOM-1 + OV2640 + 8 MB PSRAM).
+- **Head display: the existing C6-LCD-1.47 mounts physically on the head.** Its onboard ST7789 *is* the dog's face. No second OLED is purchased for face duty; the second OLED can still live on the body as a status surface, or be deferred.
+- **Head movement: pan only** (PCA9685 ch 11). Channel 12 stays free.
+- **Servos: assumed MG90S 9 g metal-gear** (Freenove kit default — black, single signal wire). Calibration sweep will validate range per channel.
 
-> Carrier caveat — the existing `firmware/s3_cam_brain/src/vision.cpp`
-> uses an **AI-Thinker ESP32-CAM** (non-S3) pin map carried over from
-> the original firmware. The actual ESP32-**S3**-CAM you're targeting
-> will need its own camera pin map. The "S3-CAM tentative" column in
-> this document assumes a generic ESP32-S3 carrier with GPIOs 1–21 +
-> 35–48 broken out and *no other peripherals on those pins*. Confirm
-> the exact carrier (LilyGO T-Camera S3, Freenove ESP32-S3 CAM, ESP32-
-> S3-EYE, XIAO-S3-Sense, etc.) before any pin gets soldered.
+This audit re-pins every Freenove peripheral onto **Freenove S3-WROOM CAM-specific** free GPIOs (the prior tentative map assumed a generic carrier and was wrong about several pins). Phase B does not start until this section is reviewed.
 
 ---
 
-## 1. Existing pin claims (untouched by this audit)
+## 1. Freenove ESP32-S3 WROOM CAM — pin reality
 
-| Subsystem | Pin(s) | Notes |
-|-----------|--------|-------|
-| OV2640 camera bus | varies by carrier — see `firmware/s3_cam_brain/src/vision.cpp` | Currently AI-Thinker non-S3 values (`PWDN=32, XCLK=0, …`). Will be re-pinned in Phase B once carrier is confirmed. |
-| C6 UART link | S3 `GPIO17` (TX1) / `GPIO18` (RX1) at 921 600 8N1 | `firmware/s3_cam_brain/src/transport/transport.cpp` |
-| Face TFT (FSPI / SPI3_HOST) | TBD — Phase B chooses 6 free pins (MOSI / SCLK / CS / DC / RST / BL) | `firmware/s3_cam_brain/src/face_render.cpp` is gated on `FACE_TFT_ENABLED` |
-| GPIO 0 credential-reset | `GPIO0` read low ≥ 3 s at boot wipes WiFi creds | `ble_web.cpp` — keep as-is unless GPIO0 is XCLK on this carrier (likely is) |
-| Reserved on the **C6** (NOT the S3) | `6, 7, 14, 15, 21, 22` | ST7789 — listed for completeness, the S3 doesn't see them |
+The OV2640 + PSRAM + USB-OTG on this board claim a *lot* of the low-numbered GPIOs. The *typical* Freenove S3-WROOM CAM pin map (verify against the board's silk + Freenove's published `CameraPins.h`):
 
-## 2. Freenove kit hardware → S3-CAM pin remap (TENTATIVE)
+| Function | GPIO |
+|----------|------|
+| Camera D0 | 11 |
+| Camera D1 | 9 |
+| Camera D2 | 8 |
+| Camera D3 | 10 |
+| Camera D4 | 12 |
+| Camera D5 | 18 |
+| Camera D6 | 17 |
+| Camera D7 | 16 |
+| Camera XCLK | 15 |
+| Camera PCLK | 13 |
+| Camera VSYNC | 6 |
+| Camera HREF | 7 |
+| Camera SIOD (SCCB SDA) | 4 |
+| Camera SIOC (SCCB SCL) | 5 |
+| Camera PWDN | −1 (not connected) |
+| Camera RESET | −1 (not connected) |
+| Onboard RGB LED (WS2812-style) | 48 |
+| USB-OTG D+ / D− | 19 / 20 (used by native USB) |
+| SD card slot (if your variant has one) | various — verify per silk |
+| BOOT button | 0 |
+| Strapping / reset | 3, 45, 46 |
 
-Source for the Freenove side: `Freenove/Freenove_ESP32_Dog_Firmware`'s
-`RobotDefinitions.h` and `Freenove/Freenove_Robot_Dog_Kit_for_ESP32`'s
-schematic PDF.
+**That leaves as freely available:** `1, 2, 14, 21, 38, 39, 40, 41, 42, 47`. Some carriers also break out `35, 36, 37` — check the silk.
 
-| Peripheral | Freenove WROVER pin | S3-CAM tentative pin | Notes / verification |
-|-----------|--------------------|----------------------|----------------------|
-| PCA9685 SDA (I2C0) | `GPIO13` | `GPIO13` | Free on most S3-CAM carriers. On AI-Thinker non-S3 was SD-card data 3 — does not apply to S3 carriers without an SD slot. |
-| PCA9685 SCL (I2C0) | `GPIO14` | `GPIO14` | Same notes as SDA. |
-| OLED #1 (status, SSD1306) | n/a | shares I2C0 above | Address `0x3C` (default). Same bus as PCA9685. |
-| OLED #2 (face, SSD1306) | n/a | shares I2C0 above | Address `0x3D` — set via the address-select solder bridge / jumper on the back of the second board. |
-| HC-SR04 TRIG | `GPIO32` | **`GPIO38`** (suggest) | `GPIO32` collides with `CAM_PWDN`. Pick any free output GPIO; 38 is commonly broken out on S3 carriers. |
-| HC-SR04 ECHO | `GPIO12` | **`GPIO37`** (suggest) | `GPIO12` may collide with SD bus on some S3 carriers. ECHO is a 5 V signal — **add a 1 kΩ / 2 kΩ divider to bring it to 3.3 V before this GPIO**. |
-| Capacitive touch | `GPIO15` | **`GPIO4`** (suggest) | The ESP32-S3 touch peripheral is on T1–T14 = GPIO1–14. Pick any unused touch-capable pin. `GPIO4 = T4` is a common safe choice. |
-| Buzzer (passive, LEDC PWM) | `GPIO33` | **`GPIO39`** (suggest) | Any free GPIO that supports `ledc`. |
-| WS2812 DIN (4 LEDs) | `GPIO0` | **`GPIO48`** (suggest) | `GPIO0` collides with `CAM_XCLK`. `GPIO48` is the onboard RGB LED on many S3 dev boards — if you want the 4× WS2812 strip *and* the onboard LED, pick a different free pin. WS2812 prefers a 5 V data line; if your strip flickers from 3.3 V logic, add a 74AHCT1G125 buffer. |
-| Battery voltage ADC | `GPIO32` (same as TRIG, multiplexed) | **`GPIO1`** (suggest, ADC1_CH0) | Multiplexing TRIG with battery ADC is a Freenove hack — drop it. Use any free ADC1 pin and a 4:1 voltage divider. |
-| Servo battery V+ | n/a (just a rail) | — | 6.0–8.3 V pack to PCA9685 V+. **Do NOT connect to the S3 5 V rail.** |
-| **Head pan servo** | n/a | PCA9685 ch **11** | Free in Freenove's layout (they use 0–2, 5–10, 13–15). Standard 9 g hobby servo (e.g. MG90S). |
-| **Head tilt servo** | n/a | PCA9685 ch **12** | Same — free channel. Optional; if you want pan-only, leave ch 12 unused. |
-| **Camera mount** | OV2640 already on the S3-CAM | Mounts to head bracket | The OV2640 ribbon will twist with the head. Limit pan to **±90°** and add slack. Long term, a 30-pin FFC extension cable + a slip-ring or routed loop is the proper fix; for now, mechanical limits + a printed ribbon guide. |
+> **Verify against Freenove's `CameraPins.h`** before any pin gets soldered.
+> The table above is the documented default for the **ESP32-S3-WROOM CAM
+> (revision 2024)**; older revisions of the same product line may differ.
 
-Suggested S3-CAM-side pin defines (to land in `firmware/s3_cam_brain/src/pin_config.h` during Phase B):
+## 2. Critical change to existing wiring
+
+The transport refactor (this PR's shipped code) uses **`Serial1` on
+`TX=17, RX=18`** for the C6 link (`firmware/s3_cam_brain/src/transport/transport.cpp`).
+**Both of those pins are camera-bus pins (D6 and D5) on the Freenove
+S3-WROOM CAM.** That wiring will not work on this board. The C6 UART
+must be relocated to a free pair (suggested below).
+
+| Subsystem | Old pin | New pin (tentative) | Reason |
+|-----------|---------|--------------------|--------|
+| C6 UART TX | `GPIO17` | **`GPIO38`** | `17` = camera D6 |
+| C6 UART RX | `GPIO18` | **`GPIO39`** | `18` = camera D5 |
+
+The C6-side UART pins (`Serial1` RX=16, TX=17 in
+`firmware/c6_display_client/src/transport/transport.cpp`) stay as-is —
+they're on the C6, not the S3, and the C6 doesn't have a camera bus.
+
+## 3. Freenove kit hardware → Freenove S3-WROOM CAM pin remap (TENTATIVE)
+
+| Peripheral | Freenove (WROVER) original | New on S3-WROOM CAM | Notes |
+|-----------|----------------------------|---------------------|-------|
+| PCA9685 SDA (I2C0) | `GPIO13` | **`GPIO2`** | `13` is camera PCLK on this board. `GPIO2` is free and not strapping-pin-sensitive after boot. |
+| PCA9685 SCL (I2C0) | `GPIO14` | **`GPIO42`** | `14` may be free but `42` is safer (clear of any SD card mux). |
+| OLED (status, SSD1306) | n/a | I2C0 (above) at `0x3C` | Same bus as PCA9685. Mounted on the body. |
+| HC-SR04 TRIG | `GPIO32` | **`GPIO40`** | `32` does not exist on this board. |
+| HC-SR04 ECHO | `GPIO12` | **`GPIO41`** | `12` is camera D4 here. ECHO is 5 V — **add a 1 kΩ / 2 kΩ divider** before this GPIO. |
+| Capacitive touch | `GPIO15` | **`GPIO3`** | `15` is camera XCLK. `GPIO3 = T3` is touch-capable on the S3 and free. |
+| Buzzer (passive, LEDC PWM) | `GPIO33` | **`GPIO47`** | `33` does not exist on this board. |
+| WS2812 strip (4 LEDs) | `GPIO0` | **`GPIO21`** | `0` is the BOOT button on this board. `21` is broken out and free. WS2812 prefers 5 V data; add a `74AHCT1G125` buffer if flicker shows up. |
+| Battery ADC | `GPIO32` (muxed) | **`GPIO1`** (ADC1_CH0) | Drop Freenove's mux hack. Use a 4:1 divider. |
+| Onboard board RGB LED | n/a | `GPIO48` (left alone) | Useful as a "I'm alive" indicator in firmware. Don't reuse for the WS2812 strip. |
+| Servo battery V+ | n/a | — | 6.0–8.3 V pack to PCA9685 V+. **Do NOT connect to the S3 5 V rail.** |
+| **Head pan servo** | n/a | PCA9685 ch **11** | Pan-only. Soft limit ±90° to protect the C6's UART pigtail through the joint. |
+| (Head tilt — dropped) | — | — | User chose pan-only; ch 12 stays free. |
+| **C6 head display** | n/a | UART link only — see §2 | The C6 itself is mounted on the head; its onboard ST7789 *is* the face. No extra display parts on the head. |
+
+Updated `pin_config.h` (lands in Phase B):
 
 ```cpp
-// Freenove dog body — S3-CAM remap (TENTATIVE — verify per carrier)
-#define DOG_I2C_SDA      13   // shared bus: PCA9685, OLED1, OLED2
-#define DOG_I2C_SCL      14
-#define PCA9685_ADDR     0x40
-#define OLED1_ADDR       0x3C   // status
-#define OLED2_ADDR       0x3D   // face
-#define ULTRA_TRIG       38     // was Freenove GPIO32 — moved (camera PWDN conflict)
-#define ULTRA_ECHO       37     // was Freenove GPIO12 — needs 5V→3V3 divider
-#define TOUCH_PIN         4     // ESP32-S3 touch T4 — was Freenove GPIO15
-#define BUZZER_PIN       39     // LEDC PWM
-#define WS2812_DIN       48     // was Freenove GPIO0 — moved (camera XCLK conflict)
-#define WS2812_COUNT      4
-#define BATT_ADC_PIN      1     // ADC1_CH0, 4:1 divider
+// Freenove dog body on Freenove ESP32-S3 WROOM CAM
+// (TENTATIVE — verify against Freenove's CameraPins.h for your board rev)
 
-// Head pan/tilt — extra servos on the same PCA9685
+// Shared I2C0 — PCA9685 + status OLED
+#define DOG_I2C_SDA       2
+#define DOG_I2C_SCL      42
+#define PCA9685_ADDR     0x40
+#define OLED_STATUS_ADDR 0x3C   // body status OLED
+
+// Sensors / effects
+#define ULTRA_TRIG       40
+#define ULTRA_ECHO       41    // 5V → divider → 3V3
+#define TOUCH_PIN         3    // T3 on S3
+#define BUZZER_PIN       47
+#define WS2812_DIN       21
+#define WS2812_COUNT      4
+#define BATT_ADC_PIN      1    // ADC1_CH0, 4:1 divider
+
+// C6 UART link — MOVED from 17/18 (camera D5/D6 on this board)
+#define C6_LINK_TX       38
+#define C6_LINK_RX       39
+#define C6_LINK_BAUD     921600
+
+// Head — pan only
 #define HEAD_PAN_CH      11
-#define HEAD_TILT_CH     12     // -1 to disable if you want pan-only
-#define HEAD_PAN_MIN     -90    // mechanical limit, ribbon-cable-safe
-#define HEAD_PAN_MAX     +90
-#define HEAD_TILT_MIN    -30
-#define HEAD_TILT_MAX    +60
+#define HEAD_PAN_MIN    -90    // mechanical limit (C6 UART loop through joint)
+#define HEAD_PAN_MAX    +90
 ```
 
-## 3. Conflict matrix
+## 4. Conflict matrix (S3-WROOM CAM-specific)
 
-| Freenove default pin | Conflicts with | Resolution |
-|----------------------|----------------|-----------|
-| `GPIO0` (WS2812) | `CAM_XCLK` on AI-Thinker-style camera bus, also strapping pin | **Move WS2812 to `GPIO48`** |
-| `GPIO32` (HC-SR04 TRIG, battery ADC) | `CAM_PWDN` | **Move TRIG to `GPIO38`, battery ADC to `GPIO1`** |
-| `GPIO12` (HC-SR04 ECHO) | SD-card data on some carriers; strapping on classic ESP32 | **Move ECHO to `GPIO37`** + divider |
-| `GPIO15` (touch) | strapping pin / SD on some carriers | **Move touch to `GPIO4` (T4)** |
-| `GPIO13/14` (I2C) | SD-card data on AI-Thinker non-S3, free on S3 carriers | **Keep at 13/14** — but verify on your specific board |
-| `GPIO33` (buzzer) | none on S3 carriers (on classic AI-Thinker ESP32-CAM `GPIO33` isn't broken out) | **Move buzzer to `GPIO39`** for breakout consistency |
+| What was claimed | What it actually is on this board | Resolution |
+|------------------|----------------------------------|------------|
+| C6 UART TX = `GPIO17` | Camera D6 | **Move to GPIO 38** |
+| C6 UART RX = `GPIO18` | Camera D5 | **Move to GPIO 39** |
+| Freenove I2C SDA = `GPIO13` | Camera PCLK | **Move to GPIO 2** |
+| Freenove I2C SCL = `GPIO14` | OK, but adjacent to camera signals | **Move to GPIO 42** |
+| Freenove TRIG = `GPIO32` | Doesn't exist | **Use GPIO 40** |
+| Freenove ECHO = `GPIO12` | Camera D4 | **Use GPIO 41** + divider |
+| Freenove touch = `GPIO15` | Camera XCLK | **Use GPIO 3 (T3)** |
+| Freenove buzzer = `GPIO33` | Doesn't exist | **Use GPIO 47** |
+| Freenove WS2812 = `GPIO0` | BOOT button + bootstrap | **Use GPIO 21** |
+| Freenove battery ADC = `GPIO32` | Doesn't exist | **Use GPIO 1 (ADC1_CH0)** |
+| GPIO 0 credential-reset (existing) | BOOT button — usable | **Keep as-is** for the WiFi-creds-reset feature |
 
-## 4. Power & grounding
+## 5. Power & grounding
 
 ```
    ┌──────────────────────────── Servo battery (6.0–8.3 V, ≥ 3 A) ─┐
-   │                                                               │
-   │   pack (+) ──► PCA9685 V+  ──► 12× servo V+                   │
-   │   pack (–) ──► PCA9685 GND ──► 12× servo GND ─┬── ALL GND     │
-   │                                               │   COMMON      │
+   │   pack (+) ──► PCA9685 V+  ──► 12× leg servos + 1× head servo │
+   │   pack (–) ──► PCA9685 GND ──► all servo GND ─┬── COMMON GND  │
    │                                               │               │
-   │   USB / buck (5 V) ──► S3-CAM 5 V ─► 3V3 reg ─┤               │
+   │   USB / buck (5 V) ──► S3 5 V ─► 3V3 reg ─────┤               │
    │                       └──► PCA9685 VCC (logic, 3.3 V)         │
-   │                       └──► OLED1 / OLED2 VCC (3.3 V)          │
+   │                       └──► Status OLED VCC (3.3 V)            │
    │                       └──► HC-SR04 VCC (5 V — divide ECHO!)   │
-   │                       └──► WS2812 VCC (5 V)                   │
+   │                       └──► WS2812 VCC (5 V; buffer DIN if     │
+   │                            flicker shows up)                  │
+   │                       └──► C6 (mounted on head) 5 V or 3V3    │
+   │                            per the C6's `Vin` pin             │
    │                                                               │
-   │   Common GND tie-point: every device's GND meets here.        │
-   │   Logic-ground separation between servo battery and S3 logic  │
-   │   is OK and recommended IF you tie GNDs at exactly one place. │
+   │   Common GND tie-point: every device's GND meets here ONCE.   │
    └───────────────────────────────────────────────────────────────┘
 ```
 
-Hardware notes:
+Head-cable budget (the 4 wires routed through the pan joint to the C6):
 
-- **HC-SR04 ECHO is 5 V** — directly tying to a 3.3 V GPIO can damage
-  the S3 over time. 1 kΩ (top) + 2 kΩ (bottom) divider, or a 74HCT logic
-  shifter.
-- **WS2812 DIN tolerates 3.3 V on most strips** but the spec wants
-  ≥ 0.7 × VCC, so on a 5 V strip 3.3 V is borderline. Add a `74AHCT1G125`
-  single-gate buffer if the strip flickers / shows wrong colours.
-- **Servo current** — 12 × MG90S-class servos can pull > 3 A at peak.
-  Don't run them off USB. Separate battery, common ground.
+```
+   body ─── GND ─────────────────────────────► C6 GND
+   body ─── 5 V (or 3V3) ─────────────────────► C6 Vin / 3V3
+   body ─── S3 GPIO38 (TX) ──────────────────► C6 GPIO16 (RX)
+   body ─── S3 GPIO39 (RX) ◄─────────────────  C6 GPIO17 (TX)
+```
 
-## 5. Freenove gait API — function inventory (for Phase B port)
+Use 28 AWG silicone-jacket flex (5 cm slack, helical loop around the pan
+axis). With ±90° pan that's < a quarter turn per direction — well within
+flex life.
 
-From `Freenove_ESP32_Dog_Firmware/main/Motion.cpp` and friends:
+## 6. Freenove gait API — function inventory (for Phase B port)
+
+(Unchanged from prior version — kept here for reference.)
 
 | Function | What it does |
 |----------|-------------|
-| `cooToA(leg, x, y, z, &angles[3])` | Inverse kinematics: foot-tip Cartesian → 3 servo angles. Per-leg. Pure math. |
-| `move_any(alpha, stepLength, gamma, speed)` | Omnidirectional walk. `alpha` = bearing 0–360°, `stepLength` 0–20 mm, `gamma` = yaw ±360°, `speed` = 1–8 mm/10 ms. **The only "walk" primitive — no separate trot/walk.** Today blocking with `delay(TICK_MS = 10)` per tick. |
-| `twist_any(x, y, z)` | In-place body twist (no translation). |
-| `setServoAngle(channel, 0–180°)` (PCA9685) | Maps angle to 500–2500 µs pulse. |
-| `setServoOffset[4][3]` | Per-leg / per-joint calibration trim (radians). NVS-backed under key `KEY_SERVO_OFFSET`. |
-| `task_MotionService` (FreeRTOS) | Pulls `mqMotion` queue, dispatches `ACTION_MOVE_ANY`, `ACTION_TWIST`, `ACTION_DANCING`. Runs core 0. |
-| Dance routines (canned, blocking) | `danceSayHello`, `dancePushUp`, `danceStretchSelf`, `danceTurnAround`, `danceSitDown`, `danceDancing` — all in `DanceMovements.cpp`. |
-| Obstacle avoidance reflex | `task_AutoWalking` polls sonar every 200 ms, auto-issues walk parameters when obstacle detected. |
-| Servo channel layout | 12 used channels: `0, 1, 2, 5, 6, 7, 8, 9, 10, 13, 14, 15` (skipping 3, 4, 11, 12). Right-leg angles get `180° − a` inversion at channels 9, 10, 14. |
-| Body geometry | `L1 = 23 mm` (root), `L2 = 55 mm` (thigh), `L3 = 59 mm` (calf). Body 136.4 × 80 mm. Max step height 15 mm. Active radius ~104 mm. |
-| Step rate | `TICK_MS = 10` → 100 Hz inner loop; gait phase advances at `speed / TICK_MS` mm per tick. Speed clamped to 1–8 mm/10 ms. |
+| `cooToA(leg, x, y, z, &angles[3])` | Inverse kinematics: foot-tip Cartesian → 3 servo angles. Pure math. |
+| `move_any(alpha, stepLength, gamma, speed)` | Omnidirectional walk. `alpha` 0–360°, `stepLength` 0–20 mm, `gamma` ±360°, `speed` 1–8 mm/10 ms. |
+| `twist_any(x, y, z)` | In-place body twist. |
+| `setServoAngle(channel, 0–180°)` (PCA9685) | Maps to 500–2500 µs pulse. |
+| `setServoOffset[4][3]` | Per-leg / per-joint calibration trim (radians) in NVS under `KEY_SERVO_OFFSET`. |
+| Dance routines | `danceSayHello`, `dancePushUp`, `danceStretchSelf`, `danceTurnAround`, `danceSitDown`, `danceDancing`. |
+| Servo channel layout | 12 used: `0, 1, 2, 5, 6, 7, 8, 9, 10, 13, 14, 15`. Right-leg inversion on `9, 10, 14`. **Add head pan on ch 11.** |
+| Body geometry | `L1 = 23 mm` (root), `L2 = 55 mm` (thigh), `L3 = 59 mm` (calf). |
+| Step rate | `TICK_MS = 10`; speed clamped 1–8 mm / tick. |
 
-**Port plan for Phase B:**
-- Keep `cooToA`, body geometry, channel layout, calibration table verbatim.
-- Replace blocking `delay(TICK_MS)` loops with a 50 Hz FreeRTOS task ticking off a `gait_cmd_queue` of `GaitCmd { type, dir }`. The `cooToA` math stays pure.
-- Drop the dance routines for now — defer to a later milestone.
-- Keep `setServoOffset[4][3]` in NVS under the same key for forward-compatibility with their calibration tool (if anyone ever wants to use it).
+See `KINEMATICS.md` for the full IK derivation.
 
-## 6. Open decisions for the user
+## 7. Architectural consequence: C6 on the head
 
-Before Phase B starts, please confirm:
+The C6 is now physically on the head and renders the face. Two firmware
+implications:
 
-1. **Which S3-CAM carrier do you have?** (LilyGO T-Camera S3 / Freenove ESP32-S3 CAM / ESP32-S3-EYE / XIAO-S3-Sense / other.) The exact camera pin map and the "free GPIO" set depend on this. Without it, every pin in §2 stays TENTATIVE.
-2. **Is `GPIO48` taken by an onboard RGB LED on your carrier?** If yes, pick a different pin for `WS2812_DIN`.
-3. **Do you have a 4-cell or 6-cell servo pack?** Affects the battery cutoff threshold (Freenove uses 5.9 V cutoff for a 6 V nominal pack).
-4. **Confirm OLED part numbers.** Plan assumes 0.96" SSD1306 I2C with the address-select bridge accessible. If they're SH1106 or SPI variants, the driver path differs.
-5. **Servo model** (MG90S? SG90? something bigger?). Drives the calibration sweep speed and the safe step rate.
+1. **Drop the planned `OLED #2` (face) module.** The C6's ST7789 is the
+   face. The single status OLED on the body remains (Phase D shrinks).
+2. **Add a `PB_SET_FACE` packet** to the wire protocol. Payload =
+   `[face_mode:u8]`. C6 renders the face locally — eyes, mouth, blink
+   animation — from a small face-render module on the C6 side. The S3
+   just tells the C6 "be HAPPY"; C6 owns the pixels. This collapses
+   what was a fan-out (S3 face TFT *and* C6 menu) into a single send.
 
-Once these are answered I'll lock §2 into `pin_config.h` (Phase B start) and we move into the porting work.
+The `face_render` module on the **S3** becomes a thin wrapper that
+`pb_encode`s `PB_SET_FACE` and writes it to `transport()`. The blink-
+animation timer moves to the C6 side, where it belongs (the C6's loop
+already runs fast enough; the S3 doesn't need to think about it).
+
+## 8. Open decisions remaining
+
+These don't block Phase B — they're "I'd answer them while soldering":
+
+1. **Servo pack** — 4-cell NiMH (4.8 V nominal, low) or 6-cell / 2S LiPo (7.4 V)? Affects the battery-low cutoff and the LDO choice for the S3.
+2. **WS2812 strip behaviour at 3.3 V logic** — most strips work, some flicker. Buy a `74AHCT1G125` just in case (\$0.30, single-gate level shifter).
+3. **Optional second OLED on the body** — purely a status / debug surface, with the face already covered by the C6. Skip in Phase D unless wanted.
+
+Once those are settled I lock §3 into `pin_config.h` and start Phase B
+(servos + IK + gait port).
