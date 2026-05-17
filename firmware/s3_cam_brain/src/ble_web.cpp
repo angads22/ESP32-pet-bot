@@ -1,29 +1,42 @@
 // Target: ESP32-S3-CAM (brain)
-// Ported from the original esp32_cam_brain.ino. Owns BLE NUS, the WiFi
-// captive portal, the embedded HTML web UI, and the MJPEG stream handler.
-// The command dispatcher now resolves all verbs through app_state so the
-// menu controller and the phone share one code path.
+// Phase 1 of the own-it overhaul: single-board build that boots straight
+// into an open WiFi AP and serves a self-contained web app + live MJPEG
+// at http://192.168.4.1/. BLE NUS stays available for direct control.
+// Captive-portal / WiFi-station (WiFiManager) is retained behind
+// PETBOT_ENABLE_WIFI=1 for the later "join home WiFi" flow.
 
 #include "ble_web.h"
 
 #include "app_state.h"
 #include "menu_controller.h"
 
+// ─── Build flags ─────────────────────────────────────────────────────────────
+#ifndef PETBOT_AP_MODE
+#define PETBOT_AP_MODE 0
+#endif
 #ifndef PETBOT_ENABLE_STREAM
 #define PETBOT_ENABLE_STREAM 0
 #endif
 #ifndef PETBOT_ENABLE_WIFI
-// WiFi needs the "Huge APP (3 MB No OTA)" partition — see huge_app.csv.
-#define PETBOT_ENABLE_WIFI PETBOT_ENABLE_STREAM
+#define PETBOT_ENABLE_WIFI 0
 #endif
 
-#if PETBOT_ENABLE_WIFI
+// Derived: HTTP server lives whenever EITHER WiFi mode is on.
+#if PETBOT_AP_MODE || PETBOT_ENABLE_WIFI
+  #define PETBOT_HTTP_ENABLED 1
+#else
+  #define PETBOT_HTTP_ENABLED 0
+#endif
+
+#if PETBOT_HTTP_ENABLED
   #include <WiFi.h>
-  #include <WiFiManager.h>
-  #include <ESPmDNS.h>
   #include "esp_http_server.h"
 #endif
-#if PETBOT_ENABLE_STREAM
+#if PETBOT_ENABLE_WIFI
+  #include <WiFiManager.h>
+  #include <ESPmDNS.h>
+#endif
+#if PETBOT_ENABLE_STREAM || PETBOT_AP_MODE
   #include "esp_camera.h"
 #endif
 
@@ -40,6 +53,8 @@
 
 // ─── Identity / UUIDs ────────────────────────────────────────────────────────
 #define BLE_DEVICE_NAME   "PetBot"
+#define AP_SSID_PREFIX    "PetBot_"           // suffixed with last-4-hex of MAC
+#define AP_PASSWORD       "petbot123"         // open networks confuse iOS — use WPA2
 #define WIFI_SETUP_SSID   "PETBOT_SETUP"
 #define WIFI_SETUP_PASS   "petbot123"
 #define MDNS_NAME         "petbot"
@@ -117,10 +132,14 @@ void handleCommand(const String& cmd) {
         menu_controller::pushDebugLine(cmd.substring(7).c_str());
         send("OK:SCREEN");
     } else if (cmd == "STATUS") {
-        String s = String("STATUS:ok,face=") + app_state::expressionName(app_state::expression())
-                 + ",mode=" + app_state::modeName(app_state::mode());
+        String s = String("STATUS:ok face=") + app_state::expressionName(app_state::expression())
+                 + " mode=" + app_state::modeName(app_state::mode())
+                 + " up=" + String((unsigned long)(millis() / 1000)) + "s";
+      #if PETBOT_AP_MODE
+        s += " ap=" AP_SSID_PREFIX;
+      #endif
       #if PETBOT_ENABLE_WIFI
-        s += ",web=http://" MDNS_NAME ".local";
+        s += " web=http://" MDNS_NAME ".local";
       #endif
         send(s);
     } else {
@@ -128,39 +147,95 @@ void handleCommand(const String& cmd) {
     }
 }
 
-// ─── WiFi + web UI ───────────────────────────────────────────────────────────
-#if PETBOT_ENABLE_WIFI
+// ─── HTTP server + web app ───────────────────────────────────────────────────
+#if PETBOT_HTTP_ENABLED
 
-static const char WEBAPP_HTML[] =
-    "<!DOCTYPE html><html><head>"
-    "<meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-    "<title>PetBot</title><style>*{box-sizing:border-box}"
-    "body{font-family:sans-serif;background:#1a1a2e;color:#fff;max-width:360px;margin:0 auto;padding:16px}"
-    "h1{text-align:center;color:#e94560}"
-    ".g{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}"
-    "button{background:#16213e;color:#fff;border:2px solid #e94560;border-radius:8px;"
-    "padding:14px;font-size:22px;cursor:pointer;-webkit-tap-highlight-color:transparent}"
-    "button:active{background:#e94560}.r{display:flex;gap:8px;margin-top:8px}"
-    "input{flex:1;padding:8px;background:#16213e;color:#fff;border:2px solid #e94560;border-radius:8px}"
-    "#st{padding:6px;border-radius:4px;background:#16213e;margin:8px 0;font-size:13px}"
-    "</style></head><body><h1>PetBot</h1><div id=st>Connected</div>"
-    "<div class=g><i></i>"
-    "<button ontouchstart=\"go('MOVE:fwd')\" ontouchend=\"go('MOVE:stop')\">&#9650;</button><i></i>"
-    "<button ontouchstart=\"go('MOVE:left')\" ontouchend=\"go('MOVE:stop')\">&#9664;</button>"
-    "<button onclick=\"go('MOVE:stop')\">&#9632;</button>"
-    "<button ontouchstart=\"go('MOVE:right')\" ontouchend=\"go('MOVE:stop')\">&#9654;</button>"
-    "<i></i><button ontouchstart=\"go('MOVE:back')\" ontouchend=\"go('MOVE:stop')\">&#9660;</button>"
-    "<i></i></div><div class=r><input id=t placeholder='Type to speak...'>"
-    "<button onclick=\"go('SAY:'+document.getElementById('t').value)\">&#128263;</button>"
-    "</div><script>function go(c){fetch('/cmd?c='+encodeURIComponent(c))"
-    ".then(r=>r.text()).then(t=>document.getElementById('st').textContent=t)"
-    ".catch(()=>document.getElementById('st').textContent='error')}</script></body></html>";
+// Single-page app served at "/". Live MJPEG at top, status, hold-to-move
+// D-pad, face presets, and a link to the (Step 1.2) calibration screen.
+static const char WEBAPP_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>PetBot</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font-family:system-ui,sans-serif;background:#0a0a14;color:#fff;margin:0 auto;padding:12px;max-width:520px}
+h1{text-align:center;margin:8px 0;color:#e94560;letter-spacing:.04em}
+.stream{width:100%;border-radius:8px;background:#16213e;display:block;aspect-ratio:4/3}
+#st{padding:8px;background:#16213e;border-radius:8px;margin:12px 0;font:12px ui-monospace,monospace;word-break:break-all}
+h3{margin:16px 0 6px;color:#e94560;font-size:13px;text-transform:uppercase;letter-spacing:.06em}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+button{background:#16213e;color:#fff;border:2px solid #e94560;border-radius:8px;padding:14px;font-size:18px;cursor:pointer;font-family:inherit}
+button:active{background:#e94560}
+.link{display:block;text-align:center;padding:12px;background:#16213e;color:#fff;border:2px solid #e94560;border-radius:8px;text-decoration:none;margin-top:8px}
+.link:active{background:#e94560}
+</style></head><body>
+<h1>PetBot</h1>
+<img class="stream" src="/stream" alt="camera feed">
+<div id="st">connecting…</div>
+
+<h3>Move</h3>
+<div class="pad">
+  <i></i>
+  <button data-cmd="MOVE:fwd">&#9650;</button>
+  <i></i>
+  <button data-cmd="MOVE:left">&#9664;</button>
+  <button onclick="c('MOVE:stop')">&#9632;</button>
+  <button data-cmd="MOVE:right">&#9654;</button>
+  <i></i>
+  <button data-cmd="MOVE:back">&#9660;</button>
+  <i></i>
+</div>
+
+<h3>Face</h3>
+<div class="pad">
+  <button onclick="c('FACE:IDLE')">idle</button>
+  <button onclick="c('FACE:HAPPY')">happy</button>
+  <button onclick="c('FACE:SLEEP')">sleep</button>
+</div>
+
+<a class="link" href="/calibrate">Servo calibration &rarr;</a>
+
+<script>
+const $=id=>document.getElementById(id);
+function c(cmd){fetch('/cmd?c='+encodeURIComponent(cmd)).then(r=>r.text()).then(t=>$('st').textContent=t).catch(()=>{$('st').textContent='offline'})}
+document.querySelectorAll('button[data-cmd]').forEach(btn=>{
+  const cmd=btn.dataset.cmd;
+  const press=e=>{e.preventDefault();c(cmd)};
+  const release=e=>{e.preventDefault();c('MOVE:stop')};
+  btn.addEventListener('mousedown',press);
+  btn.addEventListener('touchstart',press,{passive:false});
+  btn.addEventListener('mouseup',release);
+  btn.addEventListener('mouseleave',release);
+  btn.addEventListener('touchend',release);
+});
+setInterval(()=>{fetch('/cmd?c=STATUS').then(r=>r.text()).then(t=>$('st').textContent=t).catch(()=>{})},2000);
+</script>
+</body></html>)HTML";
+
+// Placeholder until Step 1.2 — landing here tells the user where they are.
+static const char CALIBRATE_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PetBot — calibrate</title>
+<style>body{font-family:system-ui,sans-serif;background:#0a0a14;color:#fff;padding:20px;max-width:480px;margin:0 auto;text-align:center}h1{color:#e94560}a{display:inline-block;color:#fff;border:2px solid #e94560;padding:10px 20px;border-radius:8px;text-decoration:none;margin-top:20px}</style>
+</head><body>
+<h1>Servo calibration</h1>
+<p>Coming in Step 1.2 — sliders per servo, &ldquo;release torque&rdquo; per leg, &ldquo;Save home&rdquo; to NVS.</p>
+<a href="/">&larr; back</a>
+</body></html>)HTML";
 
 static httpd_handle_t s_httpd = nullptr;
 
 static esp_err_t handle_root(httpd_req_t* r) {
     httpd_resp_set_type(r, "text/html");
+    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
     httpd_resp_sendstr(r, WEBAPP_HTML);
+    return ESP_OK;
+}
+
+static esp_err_t handle_calibrate(httpd_req_t* r) {
+    httpd_resp_set_type(r, "text/html");
+    httpd_resp_sendstr(r, CALIBRATE_HTML);
     return ESP_OK;
 }
 
@@ -191,7 +266,7 @@ static esp_err_t handle_cmd(httpd_req_t* r) {
     return ESP_OK;
 }
 
-  #if PETBOT_ENABLE_STREAM
+#if PETBOT_ENABLE_STREAM || PETBOT_AP_MODE
 static esp_err_t handle_stream(httpd_req_t* req) {
     camera_fb_t* fb = nullptr; esp_err_t res = ESP_OK; char hdr[64];
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -210,8 +285,48 @@ static esp_err_t handle_stream(httpd_req_t* req) {
     }
     return res;
 }
-  #endif
+#endif
 
+static void start_http_server() {
+    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    cfg.lru_purge_enable = true;
+    cfg.max_uri_handlers = 8;
+    if (httpd_start(&s_httpd, &cfg) != ESP_OK) {
+        Serial.println("[HTTP] httpd_start FAILED");
+        return;
+    }
+    httpd_uri_t ru = { "/",          HTTP_GET, handle_root,      nullptr };
+    httpd_uri_t cu = { "/cmd",       HTTP_GET, handle_cmd,       nullptr };
+    httpd_uri_t kl = { "/calibrate", HTTP_GET, handle_calibrate, nullptr };
+    httpd_register_uri_handler(s_httpd, &ru);
+    httpd_register_uri_handler(s_httpd, &cu);
+    httpd_register_uri_handler(s_httpd, &kl);
+#if PETBOT_ENABLE_STREAM || PETBOT_AP_MODE
+    httpd_uri_t su = { "/stream",    HTTP_GET, handle_stream,    nullptr };
+    httpd_register_uri_handler(s_httpd, &su);
+#endif
+    Serial.println("[HTTP] Web UI active");
+}
+
+#endif  // PETBOT_HTTP_ENABLED
+
+// ─── WiFi bring-up paths ─────────────────────────────────────────────────────
+#if PETBOT_AP_MODE
+static void setup_wifi() {
+    // Pure AP mode: no station, no captive portal, no auto-connect.
+    char ssid[32];
+    uint64_t mac = ESP.getEfuseMac();
+    snprintf(ssid, sizeof(ssid), AP_SSID_PREFIX "%04x", (unsigned)(mac & 0xFFFF));
+    WiFi.mode(WIFI_AP);
+    if (!WiFi.softAP(ssid, AP_PASSWORD)) {
+        Serial.println("[WiFi] softAP FAILED");
+        return;
+    }
+    Serial.printf("[WiFi] AP up: SSID=%s  pass=%s  IP=%s\n",
+                  ssid, AP_PASSWORD, WiFi.softAPIP().toString().c_str());
+    start_http_server();
+}
+#elif PETBOT_ENABLE_WIFI
 static void setup_wifi() {
     pinMode(0, INPUT_PULLUP);
     if (digitalRead(0) == LOW) {
@@ -244,24 +359,11 @@ static void setup_wifi() {
         MDNS.addService("http", "tcp", 80);
         Serial.println("[mDNS] http://" MDNS_NAME ".local");
     }
-
-    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    if (httpd_start(&s_httpd, &cfg) == ESP_OK) {
-        httpd_uri_t ru = { "/",    HTTP_GET, handle_root, nullptr };
-        httpd_uri_t cu = { "/cmd", HTTP_GET, handle_cmd,  nullptr };
-        httpd_register_uri_handler(s_httpd, &ru);
-        httpd_register_uri_handler(s_httpd, &cu);
-      #if PETBOT_ENABLE_STREAM
-        httpd_uri_t su = { "/stream", HTTP_GET, handle_stream, nullptr };
-        httpd_register_uri_handler(s_httpd, &su);
-      #endif
-        Serial.println("[HTTP] Web UI active");
-    }
+    start_http_server();
 }
-
-#else  // !PETBOT_ENABLE_WIFI
+#else
 static void setup_wifi() {
-    Serial.println("[WiFi] disabled — compile with -DPETBOT_ENABLE_WIFI=1 + Huge APP partition");
+    Serial.println("[WiFi] disabled (build with -DPETBOT_AP_MODE=1 or -DPETBOT_ENABLE_WIFI=1)");
 }
 #endif
 

@@ -1,18 +1,25 @@
 // Target: ESP32-S3-CAM (brain)
 // OV2640 capture init. Detection logic is intentionally stubbed — Phase 2
-// per ROBOT_FIRMWARE_PLAN.md §9.
+// per ROBOT_FIRMWARE_PLAN.md §9. The camera comes up whenever STREAM is
+// enabled OR AP-mode is on (the AP-mode app expects MJPEG at /stream).
 
 #include "vision.h"
 
 #include <Arduino.h>
 
-#if defined(PETBOT_ENABLE_STREAM) && PETBOT_ENABLE_STREAM
+#if (defined(PETBOT_ENABLE_STREAM) && PETBOT_ENABLE_STREAM) || \
+    (defined(PETBOT_AP_MODE)        && PETBOT_AP_MODE)
+  #define PETBOT_NEED_CAMERA 1
+#endif
+
+#if PETBOT_NEED_CAMERA
   #include "esp_camera.h"
 
-  // AI-Thinker-style routing carried over from the original ESP32-CAM
-  // firmware. If your S3-CAM variant uses a different pin map, override
-  // these defines in build_flags or edit here.
-  #ifndef CAM_PWDN
+  // ── Camera pin map ──────────────────────────────────────────────────────
+  // Default below is the Freenove ESP32-S3 WROOM CAM board (the user's
+  // confirmed carrier — see HARDWARE_MAP.md). The legacy AI-Thinker ESP32-
+  // CAM pin map is retained behind PETBOT_BOARD_AITHINKER for posterity.
+  #if defined(PETBOT_BOARD_AITHINKER) && PETBOT_BOARD_AITHINKER
     #define CAM_PWDN   32
     #define CAM_RESET  -1
     #define CAM_XCLK    0
@@ -29,6 +36,24 @@
     #define CAM_VSYNC  25
     #define CAM_HREF   23
     #define CAM_PCLK   22
+  #else
+    // Freenove ESP32-S3 WROOM CAM (default)
+    #define CAM_PWDN   -1
+    #define CAM_RESET  -1
+    #define CAM_XCLK   15
+    #define CAM_SIOD    4
+    #define CAM_SIOC    5
+    #define CAM_D7     16
+    #define CAM_D6     17
+    #define CAM_D5     18
+    #define CAM_D4     12
+    #define CAM_D3     10
+    #define CAM_D2      8
+    #define CAM_D1      9
+    #define CAM_D0     11
+    #define CAM_VSYNC   6
+    #define CAM_HREF    7
+    #define CAM_PCLK   13
   #endif
 #endif
 
@@ -37,7 +62,7 @@ namespace vision {
 static unsigned long g_last_seen_ms = 0;
 
 void init() {
-#if defined(PETBOT_ENABLE_STREAM) && PETBOT_ENABLE_STREAM
+#if PETBOT_NEED_CAMERA
     camera_config_t cfg = {};
     cfg.ledc_channel = LEDC_CHANNEL_0; cfg.ledc_timer = LEDC_TIMER_0;
     cfg.pin_d0 = CAM_D0; cfg.pin_d1 = CAM_D1; cfg.pin_d2 = CAM_D2;
@@ -52,7 +77,7 @@ void init() {
     if (esp_camera_init(&cfg) != ESP_OK) Serial.println("[vision] OV2640 init FAILED");
     else                                 Serial.println("[vision] OV2640 ready");
 #else
-    Serial.println("[vision] disabled (no stream/ML build)");
+    Serial.println("[vision] disabled (no AP-mode / no stream build)");
 #endif
 }
 
