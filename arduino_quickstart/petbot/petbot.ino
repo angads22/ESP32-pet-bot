@@ -87,7 +87,17 @@
 #define PCA9685_ADDR  0x40
 
 // ─── Servo layout ───────────────────────────────────────────────────────
-const uint8_t LEG_CH[12]   = { 0, 1, 2,  5, 6, 7,  8, 9, 10, 13, 14, 15 };
+// PCA9685 channel → physical leg+joint mapping for THIS user's robot.
+// Grouped FL, FR, BL, BR with [hip, thigh, calf] inside each leg, so
+// the gait engine can index as LEG_CH[leg*3 + joint]:
+//   leg 0 = FL,  leg 1 = FR,  leg 2 = BL,  leg 3 = BR
+//   joint 0 = hip, joint 1 = thigh, joint 2 = calf
+const uint8_t LEG_CH[12]   = {
+     3,  1,  2,   // FL: hip=ch3,  thigh=ch1,  calf=ch2   (LF hip moved from ch0 → ch3)
+    15, 14, 13,   // FR: hip=ch15, thigh=ch14, calf=ch13  (reversed in channel order)
+     7,  6,  5,   // BL: hip=ch7,  thigh=ch6,  calf=ch5   (reversed in channel order)
+     8,  9, 10,   // BR: hip=ch8,  thigh=ch9,  calf=ch10
+};
 const char*   LEG_NAME[12] = {
     "FL hip", "FL thigh", "FL calf",
     "FR hip", "FR thigh", "FR calf",
@@ -101,18 +111,18 @@ const char*   LEG_NAME[12] = {
 // once the user has hit "Save Home" in the app — these are the bootstrap
 // fallback before any save has happened (e.g. after a fresh flash).
 static const uint16_t HOME_US[12] = {
-    /* FL hip   ch  0 */ 1500,
+    /* FL hip   ch  3 */ 1500,
     /* FL thigh ch  1 */ 1500,
     /* FL calf  ch  2 */ 1500,
-    /* FR hip   ch  5 */ 1500,
-    /* FR thigh ch  6 */ 1500,
-    /* FR calf  ch  7 */ 1500,
-    /* BL hip   ch  8 */ 1500,
-    /* BL thigh ch  9 */ 1500,
-    /* BL calf  ch 10 */ 1500,
-    /* BR hip   ch 13 */ 1500,
-    /* BR thigh ch 14 */ 1500,
-    /* BR calf  ch 15 */ 1500,
+    /* FR hip   ch 15 */ 1500,
+    /* FR thigh ch 14 */ 1500,
+    /* FR calf  ch 13 */ 1500,
+    /* BL hip   ch  7 */ 1500,
+    /* BL thigh ch  6 */ 1500,
+    /* BL calf  ch  5 */ 1500,
+    /* BR hip   ch  8 */ 1500,
+    /* BR thigh ch  9 */ 1500,
+    /* BR calf  ch 10 */ 1500,
 };
 
 // ─── Globals ────────────────────────────────────────────────────────────
@@ -263,6 +273,7 @@ input[type=text],input[type=password]{width:100%;padding:10px;background:#16213e
   <div class="actions">
     <button onclick="f('IDLE')">idle</button>
     <button onclick="f('HAPPY')">happy</button>
+    <button onclick="f('WALK')">walk</button>
     <button onclick="f('SAD')">sad</button>
     <button onclick="f('ANGRY')">angry</button>
     <button onclick="f('SLEEP')">sleep</button>

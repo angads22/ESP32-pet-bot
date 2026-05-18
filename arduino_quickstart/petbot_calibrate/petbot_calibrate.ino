@@ -57,7 +57,9 @@
 // here. Use the "Wiggle" buttons to identify which physical joint each
 // channel drives, then tell me the mapping and I'll bake labels into
 // petbot.ino.
-const uint8_t LEG_CH[12] = { 0, 1, 2,  5, 6, 7,  8, 9, 10, 13, 14, 15 };
+// Active channels (12 of the 16 PCA9685 outputs are wired to servos).
+// Reflects the user's actual wiring: FL hip is on ch 3, not ch 0.
+const uint8_t LEG_CH[12] = { 1, 2, 3,  5, 6, 7,  8, 9, 10, 13, 14, 15 };
 
 static Adafruit_PWMServoDriver pca(PCA9685_ADDR);
 static uint16_t s_us[16] = {0};
@@ -120,7 +122,7 @@ pre#out{background:#0f1322;border:1px solid #1f2236;border-radius:8px;padding:10
 
 <script>
 const $=id=>document.getElementById(id);
-const CHANNELS=[0,1,2,5,6,7,8,9,10,13,14,15];
+const CHANNELS=[1,2,3,5,6,7,8,9,10,13,14,15];   // user's wiring: FL hip on 3
 
 function build(){
   const root=$('legs'); root.innerHTML='';
@@ -159,9 +161,17 @@ function showHome(){
     s += '// Tell me which physical leg+joint each channel drives and I will\n';
     s += '// bake the leg-labelled HOME_US[] into petbot.ino.\n';
     s += 'channel -> pulse:\n';
+    // User's known mapping — relabel each line so it's easy to scan.
+    const LABEL = {
+       3:'FL hip',  1:'FL thigh',  2:'FL calf',
+      15:'FR hip', 14:'FR thigh', 13:'FR calf',
+       7:'BL hip',  6:'BL thigh',  5:'BL calf',
+       8:'BR hip',  9:'BR thigh', 10:'BR calf',
+    };
     CHANNELS.forEach(ch=>{
       const us = j[ch] || 1500;
-      s += `  ch ${String(ch).padStart(2)} : ${us} µs\n`;
+      const lab = (LABEL[ch] || '?').padEnd(9);
+      s += `  ch ${String(ch).padStart(2)}  ${lab} : ${us} µs\n`;
     });
     $('out').textContent = s;
     $('out').style.display = 'block';

@@ -6,36 +6,40 @@
  *              FACE:NAME commands and renders the matching expression.
  *
  *  ── Commands (line-terminated; LF or CR both OK) ───────────────────────
- *    FACE:IDLE      neutral, gentle blink
- *    FACE:HAPPY     squinty eyes, big smile
- *    FACE:SAD       drooping eyes, frown
- *    FACE:ANGRY     angled eyebrows, straight mouth
+ *    FACE:IDLE      neutral, gentle blink + occasional glances
+ *    FACE:HAPPY     squinty eyes, big smile, glances
+ *    FACE:SAD       drooping eyes, frown, glances
+ *    FACE:ANGRY     angled eyebrows, narrowed eyes
  *    FACE:SLEEP     closed eyes, "zZz"
- *    FACE:SEARCH    pupils panning left/right
- *    FACE:CURIOUS   one raised eyebrow
- *    FACE:BLINK     one-shot blink, then return to current face
+ *    FACE:SEARCH    pupils panning left/right scan
+ *    FACE:CURIOUS   one raised eyebrow, glances
+ *    FACE:WALK      forward-looking eyes, gentle vertical bounce
+ *    FACE:BLINK     one-shot blink, returns to current face
  *    PING           replies "pong" — link healthcheck
  *
- *  ── How to test it now (no PetBot wiring required) ─────────────────────
- *    1. Flash this sketch to the C6 via its USB-C port
- *    2. Open Tools → Serial Monitor at 115200
- *    3. Type   FACE:HAPPY   + Enter   → screen changes
- *    4. Same monitor will echo `ok face=HAPPY`
+ *  ── Animation hooks ───────────────────────────────────────────────────
+ *    - IDLE / HAPPY / SAD / CURIOUS: random glances every 3–6 s + blink
+ *    - WALK:                         vertical bounce at ~5 Hz
+ *    - SEARCH:                       pupils pan ±18 px ~9 Hz
+ *    - SLEEP:                        zZz "stack" stays put (frame-bound)
  *
- *  ── How to wire bot → C6 later (proper link) ───────────────────────────
- *    Body ESP32-CAM   →   C6 GPIO 16 (Serial1 RX)
- *    Body GND         →   C6 GND
- *    (no return wire needed for now — one-way commands)
- *    Then uncomment the Serial1 lines in setup() / loop() below.
+ *  ── How to test now (no bot wiring required) ──────────────────────────
+ *    Flash via the C6's USB-C, open Serial Monitor at 115200,
+ *    type   FACE:HAPPY   + Enter, screen changes.
+ *    Type   FACE:WALK    to see the bounce.
  *
- *  ── Arduino IDE setup ──────────────────────────────────────────────────
+ *  ── How to wire bot → C6 later (proper link) ──────────────────────────
+ *    Body GPIO 4 (TX)   →   C6 GPIO 16 (Serial1 RX)
+ *    Body GND           →   C6 GND
+ *    Uncomment the Serial1.begin(...) + pump_serial(Serial1) calls below.
+ *
+ *  ── Arduino IDE setup ─────────────────────────────────────────────────
  *    Tools → Board → ESP32 Arduino → "ESP32C6 Dev Module"
  *    Tools → USB CDC On Boot      → Enabled
- *    Tools → Flash Mode           → QIO
  *    Tools → Partition Scheme     → Default 4MB
  *    Tools → Upload Speed         → 921600
  *
- *  ── Libraries (install via Tools → Manage Libraries) ───────────────────
+ *  ── Libraries (install via Tools → Manage Libraries) ──────────────────
  *    - Adafruit GFX Library                  by Adafruit
  *    - Adafruit ST7735 and ST7789 Library    by Adafruit
  */
@@ -45,7 +49,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
 
-// ─── ST7789 wiring on the C6-LCD-1.47 (do NOT change — board-fixed) ─────
+// ─── ST7789 wiring on the C6-LCD-1.47 (board-fixed, do not change) ──────
 #define TFT_MOSI   6
 #define TFT_SCLK   7
 #define TFT_CS    14
@@ -60,16 +64,31 @@ static Adafruit_ST7789 tft = Adafruit_ST7789(&SPI, TFT_CS, TFT_DC, TFT_RST);
 
 // ─── Face state ─────────────────────────────────────────────────────────
 enum FaceMode : uint8_t {
-    F_IDLE = 0, F_HAPPY, F_SAD, F_ANGRY, F_SLEEP, F_SEARCH, F_CURIOUS,
+    F_IDLE = 0, F_HAPPY, F_SAD, F_ANGRY, F_SLEEP, F_SEARCH, F_CURIOUS, F_WALK,
 };
 
 static FaceMode  s_face        = F_IDLE;
 static bool      s_blink_on    = false;
 static uint32_t  s_blink_until = 0;
 static uint32_t  s_next_blink  = 0;
+
+// Idle-glance animation: pupils drift to a random direction every few
+// seconds, hold briefly, then return to center. Looks like "looking
+// around" while idle/happy/curious/sad.
+static int8_t    s_glance_x      = 0;
+static int8_t    s_glance_y      = 0;
+static uint32_t  s_next_glance   = 0;
+static uint32_t  s_glance_clear  = 0;
+
+// Search pupils pan
 static int8_t    s_search_dir  = 1;
 static uint32_t  s_next_search = 0;
 static int8_t    s_search_off  = 0;
+
+// Walk bounce
+static int8_t    s_walk_phase  = 0;
+static uint32_t  s_next_walk   = 0;
+
 static String    s_buf;
 
 // ─── Drawing helpers ────────────────────────────────────────────────────
@@ -77,7 +96,10 @@ static void fill_bg(uint16_t c) { tft.fillScreen(c); }
 
 // Eyes: two rounded rectangles, optionally with pupils.
 // eye_h = vertical height (small → closed/blink, big → wide).
-static void draw_eyes(int eye_y, int eye_h, int eye_w = 60, int pupil_off = 0,
+// pupil_x_off / pupil_y_off shift both pupils inside the eye (used for
+// idle glances and search panning).
+static void draw_eyes(int eye_y, int eye_h, int eye_w = 60,
+                      int pupil_x_off = 0, int pupil_y_off = 0,
                       uint16_t eye_c = ST77XX_WHITE, uint16_t pupil_c = ST77XX_BLACK,
                       bool draw_pupils = true) {
     const int lx = 100;
@@ -86,19 +108,17 @@ static void draw_eyes(int eye_y, int eye_h, int eye_w = 60, int pupil_off = 0,
     tft.fillRoundRect(rx - eye_w / 2, eye_y, eye_w, eye_h, 8, eye_c);
     if (draw_pupils && eye_h > 14) {
         const int cy = eye_y + eye_h / 2;
-        tft.fillCircle(lx + pupil_off, cy, 8, pupil_c);
-        tft.fillCircle(rx + pupil_off, cy, 8, pupil_c);
+        tft.fillCircle(lx + pupil_x_off, cy + pupil_y_off, 8, pupil_c);
+        tft.fillCircle(rx + pupil_x_off, cy + pupil_y_off, 8, pupil_c);
     }
 }
 
-// Smile = bottom half of a circle.
 static void draw_smile(int cx, int cy, int r, uint16_t c) {
     tft.drawCircle(cx, cy, r, c);
     tft.drawCircle(cx, cy, r - 1, c);
     tft.fillRect(cx - r - 1, cy - r - 1, 2 * r + 2, r + 1, ST77XX_BLACK);
 }
 
-// Frown = top half of a circle.
 static void draw_frown(int cx, int cy, int r, uint16_t c) {
     tft.drawCircle(cx, cy, r, c);
     tft.drawCircle(cx, cy, r - 1, c);
@@ -106,50 +126,42 @@ static void draw_frown(int cx, int cy, int r, uint16_t c) {
 }
 
 static void render() {
-    // background tinted per mood
     uint16_t bg = ST77XX_BLACK;
-    if      (s_face == F_HAPPY)   bg = 0x0220;   // dark green tint
-    else if (s_face == F_SAD)     bg = 0x0008;   // very dark blue
-    else if (s_face == F_ANGRY)   bg = 0x2000;   // dark red
-    else if (s_face == F_SLEEP)   bg = 0x0000;
+    if      (s_face == F_HAPPY)   bg = 0x0220;
+    else if (s_face == F_SAD)     bg = 0x0008;
+    else if (s_face == F_ANGRY)   bg = 0x2000;
+    else if (s_face == F_WALK)    bg = 0x0010;   // dark blue tint
     fill_bg(bg);
 
     if (s_blink_on) {
-        // Closed-eye slits across every face mode
-        draw_eyes(80, 4, 60, 0, ST77XX_WHITE, ST77XX_BLACK, false);
+        draw_eyes(80, 4, 60, 0, 0, ST77XX_WHITE, ST77XX_BLACK, false);
         return;
     }
 
     switch (s_face) {
         case F_HAPPY:
-            // Big upward-arc eyes (smile-y), bright mouth
-            draw_eyes(50, 30, 60, 0, ST77XX_WHITE, ST77XX_BLACK, false);
-            // pupils that look up
-            tft.fillCircle(100, 60, 6, ST77XX_BLACK);
-            tft.fillCircle(SCR_W - 100, 60, 6, ST77XX_BLACK);
-            // big smile
+            // Squinty arc-eyes — small, looking up
+            draw_eyes(50, 30, 60, 0, 0, ST77XX_WHITE, ST77XX_BLACK, false);
+            // Tiny pupils that respect the glance state
+            tft.fillCircle(100 + s_glance_x,           60 + s_glance_y, 6, ST77XX_BLACK);
+            tft.fillCircle(SCR_W - 100 + s_glance_x,   60 + s_glance_y, 6, ST77XX_BLACK);
             draw_smile(SCR_W / 2, 110, 30, ST77XX_WHITE);
-            // rosy cheeks
             tft.fillCircle(60, 110, 8, 0xF800);
             tft.fillCircle(SCR_W - 60, 110, 8, 0xF800);
             break;
 
         case F_SAD:
-            draw_eyes(60, 40, 60, 0, 0x6F1F, ST77XX_BLACK, true);
+            draw_eyes(60, 40, 60, s_glance_x, s_glance_y, 0x6F1F, ST77XX_BLACK, true);
             draw_frown(SCR_W / 2, 150, 25, ST77XX_WHITE);
-            // tear drop on the left
             tft.fillCircle(80, 105, 4, 0x041F);
             break;
 
         case F_ANGRY: {
-            // Hard, narrowed eyes
-            draw_eyes(70, 22, 60, 0, ST77XX_WHITE, ST77XX_BLACK, true);
-            // angled eyebrows ( \  / )
+            draw_eyes(70, 22, 60, 0, 0, ST77XX_WHITE, ST77XX_BLACK, true);
             tft.drawLine( 70, 50, 130, 65, ST77XX_RED);
             tft.drawLine( 70, 51, 130, 66, ST77XX_RED);
             tft.drawLine(SCR_W - 70, 50, SCR_W - 130, 65, ST77XX_RED);
             tft.drawLine(SCR_W - 70, 51, SCR_W - 130, 66, ST77XX_RED);
-            // straight mouth, slightly downturned at the ends
             tft.drawLine(SCR_W / 2 - 25, 135, SCR_W / 2 + 25, 135, ST77XX_WHITE);
             tft.drawLine(SCR_W / 2 - 25, 135, SCR_W / 2 - 32, 142, ST77XX_WHITE);
             tft.drawLine(SCR_W / 2 + 25, 135, SCR_W / 2 + 32, 142, ST77XX_WHITE);
@@ -157,14 +169,12 @@ static void render() {
         }
 
         case F_SLEEP:
-            // Closed-eye arcs ( ⌣ )
             for (int i = 0; i < 2; i++) {
                 int cx = (i == 0) ? 100 : SCR_W - 100;
                 tft.drawLine(cx - 22, 90, cx - 10, 96, ST77XX_WHITE);
                 tft.drawLine(cx - 10, 96, cx + 10, 96, ST77XX_WHITE);
                 tft.drawLine(cx + 10, 96, cx + 22, 90, ST77XX_WHITE);
             }
-            // zZz
             tft.setTextColor(ST77XX_WHITE);
             tft.setTextSize(2);
             tft.setCursor(SCR_W - 70, 30);
@@ -177,26 +187,34 @@ static void render() {
             tft.print("z");
             break;
 
-        case F_SEARCH: {
-            // Wide eyes, pupils offset by s_search_off
-            draw_eyes(55, 50, 60, s_search_off, ST77XX_WHITE, ST77XX_BLACK, true);
-            // small "o" mouth
+        case F_SEARCH:
+            draw_eyes(55, 50, 60, s_search_off, 0, ST77XX_WHITE, ST77XX_BLACK, true);
             tft.drawCircle(SCR_W / 2, 130, 7, ST77XX_WHITE);
             break;
-        }
 
         case F_CURIOUS:
-            draw_eyes(60, 40, 60, 0, ST77XX_WHITE, ST77XX_BLACK, true);
-            // raised right eyebrow
+            draw_eyes(60, 40, 60, s_glance_x, s_glance_y, ST77XX_WHITE, ST77XX_BLACK, true);
             tft.drawLine(SCR_W - 130, 50, SCR_W - 70, 38, ST77XX_WHITE);
             tft.drawLine(SCR_W - 130, 51, SCR_W - 70, 39, ST77XX_WHITE);
-            // small open mouth
             tft.drawCircle(SCR_W / 2, 130, 6, ST77XX_WHITE);
             break;
 
+        case F_WALK: {
+            // Gentle vertical bounce + forward-looking pupils + small open mouth
+            int bounce = s_walk_phase ? 4 : -4;
+            draw_eyes(60 + bounce, 40, 60, 0, 0, ST77XX_WHITE, ST77XX_BLACK, false);
+            tft.fillCircle(100,           80 + bounce, 8, ST77XX_BLACK);
+            tft.fillCircle(SCR_W - 100,   80 + bounce, 8, ST77XX_BLACK);
+            // open mouth (slight smile, like a happy walk)
+            tft.fillRoundRect(SCR_W / 2 - 12, 128 + bounce, 24, 9, 4, ST77XX_WHITE);
+            // tiny tongue
+            tft.fillRoundRect(SCR_W / 2 - 4, 132 + bounce, 8, 6, 3, 0xF800);
+            break;
+        }
+
         case F_IDLE:
         default:
-            draw_eyes(60, 40, 60, 0, ST77XX_WHITE, ST77XX_BLACK, true);
+            draw_eyes(60, 40, 60, s_glance_x, s_glance_y, ST77XX_WHITE, ST77XX_BLACK, true);
             tft.drawLine(SCR_W / 2 - 18, 130, SCR_W / 2 + 18, 130, ST77XX_WHITE);
             break;
     }
@@ -211,6 +229,7 @@ static const char* face_name(FaceMode f) {
         case F_SLEEP:   return "SLEEP";
         case F_SEARCH:  return "SEARCH";
         case F_CURIOUS: return "CURIOUS";
+        case F_WALK:    return "WALK";
         default:        return "?";
     }
 }
@@ -223,6 +242,7 @@ static bool parse_face(const String& s, FaceMode& out) {
     else if (s == "SLEEP")   out = F_SLEEP;
     else if (s == "SEARCH")  out = F_SEARCH;
     else if (s == "CURIOUS") out = F_CURIOUS;
+    else if (s == "WALK")    out = F_WALK;
     else return false;
     return true;
 }
@@ -245,8 +265,11 @@ static void handle_line(String& line) {
         if (!parse_face(f, m)) { Serial.print("? bad face: "); Serial.println(f); return; }
         s_face = m;
         s_blink_on = false;
-        s_next_blink = millis() + 2500 + random(0, 2000);
-        s_next_search = millis() + 500;
+        s_glance_x = s_glance_y = 0;
+        s_next_blink   = millis() + 2500 + random(0, 2000);
+        s_next_glance  = millis() + 3500 + random(0, 2500);
+        s_next_search  = millis() + 110;
+        s_next_walk    = millis() + 200;
         render();
         Serial.print("ok face="); Serial.println(face_name(s_face));
         return;
@@ -254,8 +277,6 @@ static void handle_line(String& line) {
     Serial.print("? unknown: "); Serial.println(line);
 }
 
-// ─── Drain a Serial source one byte at a time, calling handle_line(buf)
-// on each complete line.
 static void pump_serial(Stream& port) {
     while (port.available()) {
         char c = (char)port.read();
@@ -283,22 +304,24 @@ void setup() {
     // Backlight on a PWM channel at ~30% brightness. Drops board-warmth
     // a lot vs. driving the BL pin fully high. If you need it brighter,
     // raise the second arg of ledcWrite() up to 255.
-    // (Arduino-ESP32 v3.x API — v2.x would use ledcSetup + ledcAttachPin.)
     ledcAttach(TFT_BL, 5000 /*Hz*/, 8 /*-bit*/);
     ledcWrite(TFT_BL, 80);   // 0–255, ~30%
 
     SPI.begin(TFT_SCLK, /*MISO*/ -1, TFT_MOSI, TFT_CS);
-    tft.init(SCR_H, SCR_W);     // native portrait dims
-    tft.setRotation(1);          // landscape 320×172
+    tft.init(SCR_H, SCR_W);
+    tft.setRotation(1);
     tft.fillScreen(ST77XX_BLACK);
     tft.setTextColor(ST77XX_WHITE);
 
     render();
 
-    s_next_blink  = millis() + 3000;
-    s_next_search = millis() + 500;
+    uint32_t now = millis();
+    s_next_blink  = now + 3000;
+    s_next_glance = now + 4000;
+    s_next_search = now + 500;
+    s_next_walk   = now + 200;
 
-    Serial.println("ready — try: FACE:HAPPY  /  FACE:IDLE  /  FACE:BLINK  /  PING");
+    Serial.println("ready — try: FACE:WALK  /  FACE:IDLE  /  FACE:HAPPY  /  FACE:BLINK");
 }
 
 void loop() {
@@ -307,28 +330,60 @@ void loop() {
 
     uint32_t now = millis();
 
-    // End-of-blink return
+    // ─── Blink (end-of-blink) ────────────────────────────────────────
     if (s_blink_on && now >= s_blink_until) {
         s_blink_on = false;
         s_next_blink = now + 2500 + random(0, 2000);
         render();
     }
 
-    // Idle blink loop on the awake faces
-    bool blinking_face =
+    bool glance_face =
         (s_face == F_IDLE || s_face == F_HAPPY || s_face == F_CURIOUS || s_face == F_SAD);
-    if (blinking_face && !s_blink_on && now >= s_next_blink) {
+
+    // ─── Blink scheduler ─────────────────────────────────────────────
+    if (glance_face && !s_blink_on && now >= s_next_blink) {
         s_blink_on = true;
         s_blink_until = now + 130;
         render();
     }
 
-    // Search-eye pan
+    // ─── Idle-glance scheduler ───────────────────────────────────────
+    if (glance_face && !s_blink_on) {
+        // Time to start a new glance?
+        if (s_glance_x == 0 && s_glance_y == 0 && now >= s_next_glance) {
+            // Pick a random direction. Keeps within a sensible eye box.
+            static const int8_t DIRS[][2] = {
+                {-14,  0}, {14,  0}, {0, -7}, {-12, -5}, {12, -5}, {-10, 5}, {10, 5}
+            };
+            const int N = sizeof(DIRS) / sizeof(DIRS[0]);
+            int i = random(0, N);
+            s_glance_x = DIRS[i][0];
+            s_glance_y = DIRS[i][1];
+            s_glance_clear = now + 500 + random(0, 600);
+            s_next_glance  = now + 3500 + random(0, 3500);
+            render();
+        }
+        // Time to return the pupils to center?
+        else if ((s_glance_x || s_glance_y) && now >= s_glance_clear) {
+            s_glance_x = 0;
+            s_glance_y = 0;
+            render();
+        }
+    }
+
+    // ─── Search-eye pan ──────────────────────────────────────────────
     if (s_face == F_SEARCH && !s_blink_on && now >= s_next_search) {
         s_search_off += s_search_dir * 6;
         if (s_search_off >  18) s_search_dir = -1;
         if (s_search_off < -18) s_search_dir = +1;
         s_next_search = now + 110;
+        render();
+    }
+
+    // ─── Walk bounce ─────────────────────────────────────────────────
+    if (s_face == F_WALK && !s_blink_on && now >= s_next_walk) {
+        s_walk_phase ^= 1;
+        s_next_walk = now + 200;
         render();
     }
 
