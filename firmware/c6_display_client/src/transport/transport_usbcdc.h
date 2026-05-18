@@ -1,5 +1,6 @@
 // Target: ESP32-C6-LCD-1.47 (thin display client)
-// USB CDC DEVICE stub. See top of transport_usbcdc.cpp for the full TODO.
+// USB CDC DEVICE stub. See the USB CDC section in
+// firmware/c6_display_client/petbot_c6.ino for the full TODO.
 
 #pragma once
 

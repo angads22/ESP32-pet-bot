@@ -17,15 +17,15 @@ The repo ships two PlatformIO firmwares from one root `platformio.ini`.
 
 | Env | Board | Source dir | Build flags | Partition | Purpose |
 |-----|-------|-----------|-------------|-----------|---------|
-| `petbot_s3` | `esp32-s3-devkitc-1` (or your S3-CAM variant) | `firmware/s3_cam_brain/src` | *(none)* | `huge_app.csv` | Brain — BLE + WiFi + vision + motors + audio + big face |
+| `petbot_s3` | `esp32-s3-devkitc-1` (or your S3-CAM variant) | `firmware/s3_cam_brain/petbot_s3.ino` | *(none)* | `huge_app.csv` | Brain — BLE + WiFi + vision + motors + audio + big face |
 | `petbot_s3_wifi` | same | same | `-DPETBOT_ENABLE_WIFI=1` | `huge_app.csv` | Brain with captive-portal web UI |
 | `petbot_s3_stream` | same | same | `-DPETBOT_ENABLE_WIFI=1 -DPETBOT_ENABLE_STREAM=1` | `huge_app.csv` | Brain with web UI + MJPEG stream |
-| `petbot_c6` | `esp32-c6-devkitc-1` (Waveshare ESP32-C6-LCD-1.47) | `firmware/c6_display_client/src` | *(none)* | default | Thin client — ST7789 + input only |
+| `petbot_c6` | `esp32-c6-devkitc-1` (Waveshare ESP32-C6-LCD-1.47) | `firmware/c6_display_client/petbot_c6.ino` | *(none)* | default | Thin client — ST7789 + input only |
 
 Default transport is UART (`-DPB_TRANSPORT_UART=1`, on by default).
 USB-CDC (`-DPB_TRANSPORT_USBCDC=1`) is stubbed — see Task 8 in the
 working task list and the TODO block at the top of
-`transport_usbcdc.cpp`.
+`firmware/s3_cam_brain/petbot_s3.ino` and `firmware/c6_display_client/petbot_c6.ino`.
 
 Build commands:
 
@@ -55,7 +55,7 @@ UART runs at **921600 8N1**. Common ground is non-negotiable.
 
 For USB-CDC transport (later milestone) the S3 hosts a USB CDC port and
 the C6's default `Serial` becomes the link — see `BRINGUP.md` and the
-TODO comment in `firmware/s3_cam_brain/src/transport/transport_usbcdc.cpp`.
+TODO comment in `firmware/s3_cam_brain/petbot_s3.ino`.
 
 ---
 
