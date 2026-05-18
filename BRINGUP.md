@@ -112,7 +112,7 @@ The C6's reserved display pins (do not reuse, ever): **6, 7, 14, 15, 21, 22**.
   Edit `firmware/c6_display_client/petbot_c6.ino` (`kButtons[]`) and
   change the pin to match your board.
 - Multiple advances per press → debounce window too short; raise
-  `PB_INPUT_DEBOUNCE_MS` in `input.h`.
+  `PB_INPUT_DEBOUNCE_MS` in `firmware/c6_display_client/petbot_c6.ino`.
 
 ---
 

@@ -188,7 +188,7 @@ void update() {
 // Motor stubs. To wire real motors:
 //   1. Set MOTORS_ENABLED to 1.
 //   2. Pick TB6612FNG-compatible GPIOs (avoid camera bus, face-TFT bus,
-//      and the C6 transport pins configured later in this sketch).
+//      and the S3 UART pins used for the C6 link later in this sketch).
 //   3. Fill the TODO bodies.
 
 #include "motor_driver.h"
