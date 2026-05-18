@@ -12,17 +12,32 @@ to see the bot boot, broadcast a WiFi AP, and serve the live camera.
 
 ```
 arduino_quickstart/
-  README.md             ← you are here
-  petbot/               ← body firmware (ESP32-CAM)
+  README.md               ← you are here
+  petbot/                 ← body firmware (ESP32-CAM, full app)
     petbot.ino
-  petbot_c6/            ← head display firmware (ESP32-C6-LCD-1.47)
+  petbot_calibrate/       ← stripped-down "find home positions" sketch
+    petbot_calibrate.ino
+  petbot_c6/              ← head display firmware (ESP32-C6-LCD-1.47)
     petbot_c6.ino
 ```
 
 **`petbot/petbot.ino`** runs on the body MCU (Freenove ESP32-WROVER CAM
 classic, or Freenove ESP32-S3 WROOM CAM with the alt pin block).
-Provides: WiFi AP, web UI, live camera, 12-servo calibration over
-PCA9685, NVS-backed home pose, WiFi-mode toggle, FACE buttons.
+Tabbed UI (Move | Calibrate | Settings). WiFi AP, live camera, 12-servo
+calibration over PCA9685, NVS-backed home pose, WiFi-mode toggle, FACE
+buttons.
+
+**`petbot_calibrate/petbot_calibrate.ino`** is a tiny standalone sketch
+for the body that does ONE thing: 12 sliders + release buttons +
+"Show home values" → outputs a paste-able C array of pulse-widths.
+No camera, no BLE, no tabs. Use this if the main sketch's Calibrate tab
+isn't behaving, or if you just want a tight focused calibration session
+before flashing the full sketch.
+
+Workflow: flash this → calibrate → tap "Show home values" → copy the
+generated `HOME_US[]` block → paste it into `petbot/petbot.ino`
+(replace the `HOME_US` array near the top) → re-flash `petbot.ino`.
+The dog now boots into your calibrated pose every time.
 
 **`petbot_c6/petbot_c6.ino`** runs on the head display (Waveshare
 ESP32-C6-LCD-1.47). Listens on Serial for `FACE:NAME` commands and

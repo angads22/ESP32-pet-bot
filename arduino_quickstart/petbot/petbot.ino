@@ -95,6 +95,26 @@ const char*   LEG_NAME[12] = {
     "BR hip", "BR thigh", "BR calf",
 };
 
+// ─── Default home positions (calibrated per-bot) ────────────────────────
+// Replace these with the output of petbot_calibrate.ino's
+// "Show home values" button. The NVS-saved values still take priority
+// once the user has hit "Save Home" in the app — these are the bootstrap
+// fallback before any save has happened (e.g. after a fresh flash).
+static const uint16_t HOME_US[12] = {
+    /* FL hip   ch  0 */ 1500,
+    /* FL thigh ch  1 */ 1500,
+    /* FL calf  ch  2 */ 1500,
+    /* FR hip   ch  5 */ 1500,
+    /* FR thigh ch  6 */ 1500,
+    /* FR calf  ch  7 */ 1500,
+    /* BL hip   ch  8 */ 1500,
+    /* BL thigh ch  9 */ 1500,
+    /* BL calf  ch 10 */ 1500,
+    /* BR hip   ch 13 */ 1500,
+    /* BR thigh ch 14 */ 1500,
+    /* BR calf  ch 15 */ 1500,
+};
+
 // ─── Globals ────────────────────────────────────────────────────────────
 static Adafruit_PWMServoDriver s_pca(PCA9685_ADDR);
 static Preferences             s_prefs;
@@ -135,11 +155,18 @@ static void all_to_home() {
 }
 
 // ─── NVS ────────────────────────────────────────────────────────────────
+static uint16_t home_default_for(uint8_t ch) {
+    // Look up the calibrated default for this PCA9685 channel, falling
+    // back to 1500 µs (neutral) for unused channels (3, 4, 11, 12).
+    for (uint8_t i = 0; i < 12; i++) if (LEG_CH[i] == ch) return HOME_US[i];
+    return 1500;
+}
+
 static void load_home() {
     s_prefs.begin("home", true);
     for (uint8_t ch = 0; ch < 16; ch++) {
         char k[6]; snprintf(k, sizeof(k), "c%u", ch);
-        s_home_us[ch] = s_prefs.getUShort(k, 1500);
+        s_home_us[ch]  = s_prefs.getUShort(k, home_default_for(ch));
         s_servo_us[ch] = s_home_us[ch];
     }
     s_prefs.end();
