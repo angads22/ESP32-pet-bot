@@ -271,14 +271,17 @@ input[type=text],input[type=password]{width:100%;padding:10px;background:#16213e
   </div>
   <h3 style="margin:18px 0 6px;font-size:12px;color:#e94560;text-transform:uppercase;letter-spacing:.06em">Face</h3>
   <div class="actions">
-    <button onclick="f('IDLE')">idle</button>
-    <button onclick="f('HAPPY')">happy</button>
-    <button onclick="f('WALK')">walk</button>
-    <button onclick="f('SAD')">sad</button>
-    <button onclick="f('ANGRY')">angry</button>
-    <button onclick="f('SLEEP')">sleep</button>
-    <button onclick="f('SEARCH')">search</button>
-    <button onclick="f('CURIOUS')">curious</button>
+    <button onclick="f('IDLE')">(·_·) idle</button>
+    <button onclick="f('HAPPY')">(^ω^) happy</button>
+    <button onclick="f('WALK')">walking</button>
+    <button onclick="f('SAD')">(︶︹︶) sad</button>
+    <button onclick="f('CRY')">(T_T) cry</button>
+    <button onclick="f('ANGRY')">(ಠ益ಠ) angry</button>
+    <button onclick="f('LOVE')">(♡_♡) love</button>
+    <button onclick="f('SLEEP')">(=_=) sleep</button>
+    <button onclick="f('SEARCH')">(•_•) search</button>
+    <button onclick="f('CURIOUS')">(?_?) curious</button>
+    <button onclick="f('TABLE_FLIP')">┻━┻ flip</button>
   </div>
 </section>
 

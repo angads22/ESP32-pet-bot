@@ -1,22 +1,28 @@
 /*
- *  PetBot — Servo Calibration Sketch (standalone)
- *  ─────────────────────────────────────────────
+ *  PetBot / Marvin — Servo Calibration Sketch (standalone)
+ *  ────────────────────────────────────────────────────────
  *  Board     : Freenove ESP32-WROVER CAM (classic ESP32) + PCA9685
- *  Purpose   : ONE job — let you find the per-servo home pulse-widths
- *              and print them as a C array you can paste into petbot.ino.
+ *  Purpose   : Find the home pulse-widths for the 12 leg servos and
+ *              produce a paste-able list to bake into petbot.ino.
  *
- *  No camera, no BLE, no tabbed UI, no animations. Just:
- *    - AP "PetBot_Cal" (password "petbot123") at 192.168.4.1
- *    - 12 sliders, live µs feedback
- *    - "Release leg" buttons (limp the servos so you can move by hand)
- *    - "Show home values" → big block of pasteable C code
+ *  Layout (this robot's confirmed mapping):
+ *
+ *      Front-Left          Front-Right
+ *        ch 3  hip           ch 15 hip
+ *        ch 1  thigh         ch 14 thigh
+ *        ch 2  calf          ch 13 calf
+ *
+ *      Back-Left           Back-Right
+ *        ch 7  hip           ch 8  hip
+ *        ch 6  thigh         ch 9  thigh
+ *        ch 5  calf          ch 10 calf
  *
  *  ── Required library ─────────────────────────────────────────────────
  *    - Adafruit PWM Servo Driver Library    by Adafruit
  *
  *  ── Tools menu ───────────────────────────────────────────────────────
  *    Board                  : AI Thinker ESP32-CAM
- *    Flash Mode             : QIO        Flash Size : 4MB (32Mb)
+ *    Flash Mode             : QIO
  *    Partition Scheme       : Default 4MB with spiffs
  *    PSRAM                  : Enabled
  *    Upload Speed           : 921600
@@ -32,13 +38,13 @@
  *    1. Flash this sketch.
  *    2. Phone → join WiFi "PetBot_Cal" (password "petbot123").
  *    3. Open http://192.168.4.1
- *    4. Per leg: tap "Release" → move it by hand to where it should sit
- *       in the neutral stand pose → drag the slider until the servo grabs
- *       at that position. Tighten servo horn if needed.
- *    5. Repeat for all 12 servos until the dog stands cleanly.
- *    6. Tap "Show home values" — a big block of C code appears.
- *    7. Copy that block; paste it back to me or directly into petbot.ino
- *       (replace HOME_US[]).
+ *    4. Per leg: tap "Release" on a joint → physically move it where it
+ *       should sit in a clean standing pose → drag the slider until the
+ *       servo grabs at that position. Repeat for all 12.
+ *    5. (Optional) Tap "Wave demo" — each leg's calf will briefly lift
+ *       its foot in sequence to verify all servos articulate cleanly.
+ *    6. Tap "Show home values" → screenshot or copy the output and
+ *       send it to me to bake into petbot.ino.
  */
 
 #include <Arduino.h>
@@ -51,15 +57,11 @@
 #define I2C_SCL       14
 #define PCA9685_ADDR  0x40
 
-// Channels used by the Freenove robot dog. The leg→channel mapping
-// varies between kit revisions / how the user has plugged the servo
-// connectors into the PCA9685, so we don't label them by physical leg
-// here. Use the "Wiggle" buttons to identify which physical joint each
-// channel drives, then tell me the mapping and I'll bake labels into
-// petbot.ino.
 // Active channels (12 of the 16 PCA9685 outputs are wired to servos).
-// Reflects the user's actual wiring: FL hip is on ch 3, not ch 0.
 const uint8_t LEG_CH[12] = { 1, 2, 3,  5, 6, 7,  8, 9, 10, 13, 14, 15 };
+
+// The 4 "calf" channels (each leg's bottom joint) — used by Wave demo.
+const uint8_t CALF_CH[4] = { 2, 13, 5, 10 };   // FL, FR, BL, BR
 
 static Adafruit_PWMServoDriver pca(PCA9685_ADDR);
 static uint16_t s_us[16] = {0};
@@ -90,29 +92,32 @@ static const char PAGE_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
 body{background:#0a0a14;color:#e7e9ee;margin:0 auto;padding:14px;max-width:560px}
 h1{color:#e94560;margin:6px 0 4px;font-size:18px;text-align:center}
 .hint{font-size:12px;color:#9aa0b4;line-height:1.5;margin:6px 0 12px}
-.row{display:flex;align-items:center;gap:6px;margin:6px 0;padding:8px;background:#0f1322;border:1px solid #1f2236;border-radius:8px}
-.row .ch{font:bold 14px ui-monospace,monospace;color:#e94560;flex:0 0 48px;text-align:center}
+.leg-group{background:#0f1322;border:1px solid #1f2236;border-radius:8px;padding:10px 12px;margin-bottom:12px}
+.leg-group h3{margin:0 0 8px;color:#e94560;font-size:13px;text-transform:uppercase;letter-spacing:.06em}
+.row{display:flex;align-items:center;gap:6px;margin:6px 0}
+.row .ch{font:600 12px ui-monospace,monospace;color:#e94560;flex:0 0 44px}
+.row .joint{font-size:12px;color:#9aa0b4;flex:0 0 44px}
 .row input[type=range]{flex:1;accent-color:#e94560;min-width:0}
-.row .us{font:12px ui-monospace,monospace;color:#9aa0b4;min-width:42px;text-align:right}
-.row button{padding:6px 10px;background:#16213e;color:#fff;border:1px solid #1f2236;border-radius:6px;font-size:12px;cursor:pointer}
+.row .us{font:12px ui-monospace,monospace;color:#9aa0b4;min-width:48px;text-align:right}
+.row button{padding:5px 8px;background:#16213e;color:#fff;border:1px solid #1f2236;border-radius:5px;font-size:11px;cursor:pointer}
 .row button.w{background:#2a5;border-color:#2a5}
 .actions{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
 .actions button{flex:1;min-width:120px;padding:12px;background:#16213e;color:#fff;border:2px solid #1f2236;border-radius:8px;font-size:14px;cursor:pointer}
 .actions button.primary{background:#e94560;border-color:#e94560}
+.actions button.demo{background:#3a6;border-color:#3a6}
 pre#out{background:#0f1322;border:1px solid #1f2236;border-radius:8px;padding:10px;color:#a0e0a0;font:12px ui-monospace,monospace;overflow-x:auto;white-space:pre-wrap;display:none;margin-top:8px}
 .copy{display:none;margin-top:6px}
 </style></head><body>
 <h1>PetBot calibration</h1>
 <p class="hint">
-  <b>Step 1 — identify each channel.</b> Tap the green <b>Wiggle</b> button on each row in turn. The servo will briefly twitch. Note down which physical joint (hip/thigh/calf) of which leg (front-left / front-right / back-left / back-right) responds. Send me your mapping in this format:<br>
-  <code>ch 0 = FR hip, ch 1 = FR thigh, ch 2 = FR calf, …</code><br><br>
-  <b>Step 2 — find the home pulse-widths.</b> Tap <b>Release</b> on a channel → physically move that joint where it should sit in a clean standing pose → drag the slider until the servo grabs at that position. Repeat for all 12. When the dog stands cleanly, tap <b>Show home values</b> and paste the output back to me.
+  Per joint: tap <b>Release</b> → physically move that joint where it should sit in a clean standing pose → drag the slider until the servo grabs at that position. Use the green <b>Wiggle</b> button if you forget which servo is which. When the whole dog stands cleanly, tap <b>Show home values</b> below, screenshot or copy the output, and send it back.
 </p>
 
 <div id="legs"></div>
 
 <div class="actions">
   <button class="primary" onclick="showHome()">Show home values</button>
+  <button class="demo" onclick="demo()">Wave demo</button>
   <button onclick="releaseAll()">Release all</button>
   <button onclick="centerAll()">All to 1500 µs</button>
 </div>
@@ -122,31 +127,48 @@ pre#out{background:#0f1322;border:1px solid #1f2236;border-radius:8px;padding:10
 
 <script>
 const $=id=>document.getElementById(id);
-const CHANNELS=[1,2,3,5,6,7,8,9,10,13,14,15];   // user's wiring: FL hip on 3
+
+// User's confirmed wiring. hip / thigh / calf within each leg.
+const LEGS = [
+  { name: 'Front-Left',  joints: [{j:'hip', ch:3},  {j:'thigh', ch:1},  {j:'calf', ch:2}]  },
+  { name: 'Front-Right', joints: [{j:'hip', ch:15}, {j:'thigh', ch:14}, {j:'calf', ch:13}] },
+  { name: 'Back-Left',   joints: [{j:'hip', ch:7},  {j:'thigh', ch:6},  {j:'calf', ch:5}]  },
+  { name: 'Back-Right',  joints: [{j:'hip', ch:8},  {j:'thigh', ch:9},  {j:'calf', ch:10}] },
+];
 
 function build(){
   const root=$('legs'); root.innerHTML='';
-  CHANNELS.forEach(ch=>{
-    const row=document.createElement('div'); row.className='row';
-    row.innerHTML=`
-      <span class="ch">ch ${ch}</span>
-      <input type="range" min="500" max="2500" value="1500" data-ch="${ch}">
-      <span class="us" id="u${ch}">1500</span>
-      <button class="w" onclick="wig(${ch})">Wiggle</button>
-      <button onclick="r(${ch})">Release</button>`;
-    const slider=row.querySelector('input');
-    slider.oninput=e=>{
-      const v=parseInt(e.target.value);
-      $('u'+ch).textContent=v;
-      fetch(`/servo?ch=${ch}&us=${v}`);
-    };
-    root.appendChild(row);
+  LEGS.forEach(L=>{
+    const g=document.createElement('div'); g.className='leg-group';
+    let html = `<h3>${L.name}</h3>`;
+    L.joints.forEach(({j, ch})=>{
+      html += `
+        <div class="row">
+          <span class="ch">ch ${ch}</span>
+          <span class="joint">${j}</span>
+          <input type="range" min="500" max="2500" value="1500" data-ch="${ch}">
+          <span class="us" id="u${ch}">1500</span>
+          <button class="w" onclick="wig(${ch})">W</button>
+          <button onclick="r(${ch})">Rls</button>
+        </div>`;
+    });
+    g.innerHTML = html;
+    g.querySelectorAll('input').forEach(slider=>{
+      const ch = parseInt(slider.dataset.ch);
+      slider.oninput = e => {
+        const v = parseInt(e.target.value);
+        $('u' + ch).textContent = v;
+        fetch(`/servo?ch=${ch}&us=${v}`);
+      };
+    });
+    root.appendChild(g);
   });
 }
 build();
 
 function r(ch){fetch('/release?ch='+ch)}
 function wig(ch){fetch('/wiggle?ch='+ch)}
+function demo(){fetch('/demo_wave')}
 function releaseAll(){fetch('/release_all')}
 function centerAll(){
   document.querySelectorAll('input[type=range]').forEach(s=>{
@@ -156,24 +178,19 @@ function centerAll(){
 }
 
 function showHome(){
-  fetch('/home').then(r=>r.json()).then(j=>{
-    let s = '// Pulse-widths from calibration (raw — no leg labels yet).\n';
-    s += '// Tell me which physical leg+joint each channel drives and I will\n';
-    s += '// bake the leg-labelled HOME_US[] into petbot.ino.\n';
-    s += 'channel -> pulse:\n';
-    // User's known mapping — relabel each line so it's easy to scan.
-    const LABEL = {
-       3:'FL hip',  1:'FL thigh',  2:'FL calf',
-      15:'FR hip', 14:'FR thigh', 13:'FR calf',
-       7:'BL hip',  6:'BL thigh',  5:'BL calf',
-       8:'BR hip',  9:'BR thigh', 10:'BR calf',
-    };
-    CHANNELS.forEach(ch=>{
-      const us = j[ch] || 1500;
-      const lab = (LABEL[ch] || '?').padEnd(9);
-      s += `  ch ${String(ch).padStart(2)}  ${lab} : ${us} µs\n`;
+  fetch('/home').then(r=>r.json()).then(home=>{
+    const lines = [];
+    LEGS.forEach(L=>{
+      const lbl = L.name.replace('Front-','F').replace('Back-','B').replace('Left','L').replace('Right','R');
+      L.joints.forEach(({j: jname, ch})=>{
+        const us = home[ch] !== undefined ? home[ch] : 1500;
+        lines.push(`    /* ${lbl} ${jname.padEnd(5)} ch ${String(ch).padStart(2)} */ ${us},`);
+      });
     });
-    $('out').textContent = s;
+    const out = '// Marvin home pulse-widths (paste into petbot.ino HOME_US[])\n' +
+                'static const uint16_t HOME_US[12] = {\n' +
+                lines.join('\n') + '\n' + '};\n';
+    $('out').textContent = out;
     $('out').style.display = 'block';
     $('copy').style.display = 'inline-block';
   });
@@ -232,8 +249,7 @@ static esp_err_t h_release_all(httpd_req_t* r) {
     return ESP_OK;
 }
 
-// Twitch the servo so the user can identify which physical joint it is:
-//   1500 → 1700 → 1300 → restore. Total ~600 ms.
+// Twitch the servo so the user can identify which physical joint it is.
 static esp_err_t h_wiggle(httpd_req_t* r) {
     char q[32] = {};
     int ch = -1;
@@ -244,8 +260,22 @@ static esp_err_t h_wiggle(httpd_req_t* r) {
     servo_set_us((uint8_t)ch, 1700); delay(160);
     servo_set_us((uint8_t)ch, 1300); delay(160);
     servo_set_us((uint8_t)ch, saved);
-    Serial.printf("[wiggle] ch %d twitched\n", ch);
     httpd_resp_sendstr(r, "ok");
+    return ESP_OK;
+}
+
+// Lift each leg's foot briefly in sequence. Lets you verify all four
+// calves articulate without binding before committing to a gait.
+static esp_err_t h_demo_wave(httpd_req_t* r) {
+    const char* names[4] = { "FL", "FR", "BL", "BR" };
+    for (int i = 0; i < 4; i++) {
+        uint8_t ch = CALF_CH[i];
+        uint16_t saved = s_us[ch];
+        Serial.printf("[demo] lift %s calf (ch %u)\n", names[i], ch);
+        servo_set_us(ch, saved + 250); delay(450);
+        servo_set_us(ch, saved);       delay(250);
+    }
+    httpd_resp_sendstr(r, "ok demo");
     return ESP_OK;
 }
 
@@ -265,9 +295,8 @@ static esp_err_t h_home(httpd_req_t* r) {
 void setup() {
     Serial.begin(115200);
     delay(200);
-    Serial.println("\n=== PetBot Calibration ===");
+    Serial.println("\n=== Marvin servo calibration ===");
 
-    // PCA9685
     Wire.begin(I2C_SDA, I2C_SCL);
     Wire.setClock(400000);
     s_pca_ok = pca.begin();
@@ -283,15 +312,13 @@ void setup() {
         Serial.println("[pca] ok — all servos to 1500 µs");
     }
 
-    // AP
     WiFi.mode(WIFI_AP);
     WiFi.softAP("PetBot_Cal", "petbot123");
     Serial.printf("[wifi] AP: PetBot_Cal  pw: petbot123  IP: %s\n",
                   WiFi.softAPIP().toString().c_str());
 
-    // HTTP
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 8;
+    cfg.max_uri_handlers = 12;
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) {
         Serial.println("[http] start FAILED");
         return;
@@ -302,6 +329,7 @@ void setup() {
         { "/release",     HTTP_GET, h_release,     nullptr },
         { "/release_all", HTTP_GET, h_release_all, nullptr },
         { "/wiggle",      HTTP_GET, h_wiggle,      nullptr },
+        { "/demo_wave",   HTTP_GET, h_demo_wave,   nullptr },
         { "/home",        HTTP_GET, h_home,        nullptr },
     };
     for (auto& u : routes) httpd_register_uri_handler(s_httpd, &u);

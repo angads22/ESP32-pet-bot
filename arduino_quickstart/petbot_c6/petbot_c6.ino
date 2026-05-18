@@ -1,36 +1,41 @@
 /*
- *  PetBot — C6 head-display sketch
- *  ───────────────────────────────
+ *  PetBot / Marvin — C6 head-display sketch
+ *  ─────────────────────────────────────────
  *  Board     : Waveshare ESP32-C6-LCD-1.47 (onboard ST7789 172×320)
- *  Role      : Animated face for the PetBot. Listens on Serial for
- *              FACE:NAME commands and renders the matching expression.
+ *  Role      : Animated kaomoji-style face for Marvin. Listens on Serial
+ *              for FACE:NAME commands and renders the matching emotion.
  *
- *  ── Commands (line-terminated; LF or CR both OK) ───────────────────────
- *    FACE:IDLE      neutral, gentle blink + occasional glances
- *    FACE:HAPPY     squinty eyes, big smile, glances
- *    FACE:SAD       drooping eyes, frown, glances
- *    FACE:ANGRY     angled eyebrows, narrowed eyes
- *    FACE:SLEEP     closed eyes, "zZz"
- *    FACE:SEARCH    pupils panning left/right scan
- *    FACE:CURIOUS   one raised eyebrow, glances
- *    FACE:WALK      forward-looking eyes, gentle vertical bounce
- *    FACE:BLINK     one-shot blink, returns to current face
- *    PING           replies "pong" — link healthcheck
+ *  ── Faces (drawn as graphic primitives — vibe of the kaomoji) ─────────
+ *    FACE:IDLE       (·_·)            neutral; glances around + blink
+ *    FACE:HAPPY      (^ω^)            caret eyes, omega mouth, blush
+ *    FACE:SAD        (︶︹︶)         arc-down eyes, frown mouth
+ *    FACE:CRY        (T_T)            T-shaped eyes, tears falling
+ *    FACE:ANGRY      (ಠ益ಠ)         glare eyes + brow, gritted teeth
+ *    FACE:LOVE       (♡μ_μ)          heart eyes, sparkles
+ *    FACE:SLEEP      (=_=) zZz       closed eyes, sleeping Zs
+ *    FACE:SEARCH     (•_•)            wide eyes with pupils panning
+ *    FACE:CURIOUS    (?_?)            ringed eyes with floating "?"
+ *    FACE:WALK                        bouncing eyes, slight grin
+ *    FACE:TABLE_FLIP (ノಠ益ಠ)ノ彡┻━┻  arms up, motion lines, flying table
+ *    FACE:BLINK                       one-shot blink, returns to current
+ *    PING                             replies "pong" — link healthcheck
  *
- *  ── Animation hooks ───────────────────────────────────────────────────
- *    - IDLE / HAPPY / SAD / CURIOUS: random glances every 3–6 s + blink
- *    - WALK:                         vertical bounce at ~5 Hz
- *    - SEARCH:                       pupils pan ±18 px ~9 Hz
- *    - SLEEP:                        zZz "stack" stays put (frame-bound)
+ *  Auto-animations while a face is held:
+ *    - IDLE / HAPPY / SAD / CURIOUS: pupils glance around every 3.5–7 s
+ *      + a random 130 ms blink every 2.5–4.5 s.
+ *    - SEARCH: pupils pan ±18 px every ~110 ms.
+ *    - WALK:   vertical bounce ±4 px at 5 Hz.
+ *    - SLEEP:  static (no animation; gentle by design).
+ *    - TABLE_FLIP: static (the whole face is the punchline).
  *
  *  ── How to test now (no bot wiring required) ──────────────────────────
  *    Flash via the C6's USB-C, open Serial Monitor at 115200,
- *    type   FACE:HAPPY   + Enter, screen changes.
- *    Type   FACE:WALK    to see the bounce.
+ *    type     FACE:HAPPY        + Enter, screen changes.
+ *    Type     FACE:TABLE_FLIP   for the chaos one.
  *
  *  ── How to wire bot → C6 later (proper link) ──────────────────────────
- *    Body GPIO 4 (TX)   →   C6 GPIO 16 (Serial1 RX)
- *    Body GND           →   C6 GND
+ *    Body GPIO 4  (TX)   →   C6 GPIO 16 (Serial1 RX)
+ *    Body GND            →   C6 GND
  *    Uncomment the Serial1.begin(...) + pump_serial(Serial1) calls below.
  *
  *  ── Arduino IDE setup ─────────────────────────────────────────────────
@@ -57,14 +62,15 @@
 #define TFT_RST   21
 #define TFT_BL    22
 
-#define SCR_W    320   // after setRotation(1)
+#define SCR_W    320
 #define SCR_H    172
 
 static Adafruit_ST7789 tft = Adafruit_ST7789(&SPI, TFT_CS, TFT_DC, TFT_RST);
 
 // ─── Face state ─────────────────────────────────────────────────────────
 enum FaceMode : uint8_t {
-    F_IDLE = 0, F_HAPPY, F_SAD, F_ANGRY, F_SLEEP, F_SEARCH, F_CURIOUS, F_WALK,
+    F_IDLE = 0, F_HAPPY, F_SAD, F_CRY, F_ANGRY, F_LOVE,
+    F_SLEEP, F_SEARCH, F_CURIOUS, F_WALK, F_TABLE_FLIP,
 };
 
 static FaceMode  s_face        = F_IDLE;
@@ -72,15 +78,13 @@ static bool      s_blink_on    = false;
 static uint32_t  s_blink_until = 0;
 static uint32_t  s_next_blink  = 0;
 
-// Idle-glance animation: pupils drift to a random direction every few
-// seconds, hold briefly, then return to center. Looks like "looking
-// around" while idle/happy/curious/sad.
+// Idle-glance animation
 static int8_t    s_glance_x      = 0;
 static int8_t    s_glance_y      = 0;
 static uint32_t  s_next_glance   = 0;
 static uint32_t  s_glance_clear  = 0;
 
-// Search pupils pan
+// Search pan
 static int8_t    s_search_dir  = 1;
 static uint32_t  s_next_search = 0;
 static int8_t    s_search_off  = 0;
@@ -91,158 +95,367 @@ static uint32_t  s_next_walk   = 0;
 
 static String    s_buf;
 
-// ─── Drawing helpers ────────────────────────────────────────────────────
-static void fill_bg(uint16_t c) { tft.fillScreen(c); }
+// Useful colors (RGB565)
+#define C_WHITE   0xFFFF
+#define C_BLACK   0x0000
+#define C_RED     0xF800
+#define C_PINK    0xFA1F
+#define C_BLUE    0x041F
+#define C_TEAL    0x07FF
+#define C_YELLOW  0xFFE0
+#define C_BROWN   0xA200
+#define C_ORANGE  0xFD20
+#define C_GRAY    0x4208
 
-// Eyes: two rounded rectangles, optionally with pupils.
-// eye_h = vertical height (small → closed/blink, big → wide).
-// pupil_x_off / pupil_y_off shift both pupils inside the eye (used for
-// idle glances and search panning).
-static void draw_eyes(int eye_y, int eye_h, int eye_w = 60,
-                      int pupil_x_off = 0, int pupil_y_off = 0,
-                      uint16_t eye_c = ST77XX_WHITE, uint16_t pupil_c = ST77XX_BLACK,
-                      bool draw_pupils = true) {
-    const int lx = 100;
-    const int rx = SCR_W - 100;
-    tft.fillRoundRect(lx - eye_w / 2, eye_y, eye_w, eye_h, 8, eye_c);
-    tft.fillRoundRect(rx - eye_w / 2, eye_y, eye_w, eye_h, 8, eye_c);
-    if (draw_pupils && eye_h > 14) {
-        const int cy = eye_y + eye_h / 2;
-        tft.fillCircle(lx + pupil_x_off, cy + pupil_y_off, 8, pupil_c);
-        tft.fillCircle(rx + pupil_x_off, cy + pupil_y_off, 8, pupil_c);
+// Eye positions (centers)
+#define EYE_L_X   100
+#define EYE_R_X   (SCR_W - 100)
+#define EYE_Y      80
+
+// ─── Eye primitives ─────────────────────────────────────────────────────
+// (^ ^) caret peaks — two diagonal lines meeting at a top point.
+static void eye_caret(int cx, int cy, int w = 30, int h = 14, uint16_t c = C_WHITE) {
+    int x0 = cx - w / 2, x1 = cx + w / 2;
+    int yb = cy + h / 2, yt = cy - h / 2;
+    for (int t = 0; t < 3; t++) {
+        tft.drawLine(x0, yb + t, cx, yt + t, c);
+        tft.drawLine(cx, yt + t, x1, yb + t, c);
     }
 }
 
-static void draw_smile(int cx, int cy, int r, uint16_t c) {
-    tft.drawCircle(cx, cy, r, c);
-    tft.drawCircle(cx, cy, r - 1, c);
-    tft.fillRect(cx - r - 1, cy - r - 1, 2 * r + 2, r + 1, ST77XX_BLACK);
+// (︶ ︶) downward arc — open-side-up smile-like shape, but for eyes.
+static void eye_arc_down(int cx, int cy, int w = 32, int h = 10, uint16_t c = C_WHITE) {
+    for (int dx = -w / 2; dx <= w / 2; dx++) {
+        float t = (float)dx / (w / 2.0f);
+        int dy = (int)(h * (1.0f - t * t));
+        for (int s = 0; s < 2; s++) tft.drawPixel(cx + dx, cy + dy - s, c);
+    }
 }
 
-static void draw_frown(int cx, int cy, int r, uint16_t c) {
-    tft.drawCircle(cx, cy, r, c);
-    tft.drawCircle(cx, cy, r - 1, c);
-    tft.fillRect(cx - r - 1, cy, 2 * r + 2, r + 2, ST77XX_BLACK);
+// (T T) — thick T-shape for crying eyes.
+static void eye_t(int cx, int cy, uint16_t c = C_WHITE) {
+    tft.fillRect(cx - 15, cy - 12, 30, 4, c);
+    tft.fillRect(cx - 2,  cy - 12, 4,  24, c);
 }
 
+// (♡ ♡) — heart eye.
+static void eye_heart(int cx, int cy, uint16_t c = C_PINK) {
+    tft.fillCircle(cx - 8, cy - 4, 10, c);
+    tft.fillCircle(cx + 8, cy - 4, 10, c);
+    tft.fillTriangle(cx - 17, cy + 1, cx + 17, cy + 1, cx, cy + 18, c);
+}
+
+// (ಠ ಠ) — circular glare eye with thick angry brow.
+static void eye_glare(int cx, int cy, uint16_t c = C_WHITE) {
+    tft.fillCircle(cx, cy + 2, 14, c);
+    tft.fillCircle(cx, cy + 2, 5, C_BLACK);
+    // Thick angled brow on top, red
+    for (int t = 0; t < 5; t++) {
+        tft.drawLine(cx - 20, cy - 18 + t, cx + 16, cy - 24 + t, C_RED);
+    }
+}
+
+// (=_=) closed-eye line.
+static void eye_closed(int cx, int cy, int w = 30, uint16_t c = C_WHITE) {
+    tft.fillRect(cx - w / 2, cy - 2, w, 4, c);
+}
+
+// (•_•) plain wide eye, with pupil offset.
+static void eye_dot(int cx, int cy, int pupil_x = 0, int pupil_y = 0,
+                    uint16_t eye_c = C_WHITE, uint16_t pup_c = C_BLACK) {
+    tft.fillCircle(cx, cy, 16, eye_c);
+    tft.fillCircle(cx + pupil_x, cy + pupil_y, 6, pup_c);
+}
+
+// (?_?) — circle outline + floating "?".
+static void eye_question(int cx, int cy, uint16_t c = C_WHITE) {
+    tft.drawCircle(cx, cy, 14, c);
+    tft.drawCircle(cx, cy, 13, c);
+    tft.fillCircle(cx, cy, 4, c);
+    tft.setTextColor(c);
+    tft.setTextSize(2);
+    tft.setCursor(cx - 6, cy - 38);
+    tft.print("?");
+}
+
+// ─── Mouth primitives ───────────────────────────────────────────────────
+
+// ω-mouth: two small upward bumps (3-arc shape).
+static void mouth_omega(int cx, int cy, int w = 48, uint16_t c = C_WHITE) {
+    int hw = w / 2;
+    int b  = hw / 2;
+    for (int dx = -hw; dx <= hw; dx++) {
+        float v = 0;
+        // Two bumps
+        float t1 = (float)(dx + b / 2) / (b / 1.2f);
+        float t2 = (float)(dx - b / 2) / (b / 1.2f);
+        if (t1 > -1 && t1 < 1) v = max(v, (1.0f - t1 * t1) * 6.5f);
+        if (t2 > -1 && t2 < 1) v = max(v, (1.0f - t2 * t2) * 6.5f);
+        for (int s = 0; s < 2; s++) tft.drawPixel(cx + dx, cy - (int)v - s, c);
+    }
+    // Outer corner uplifts
+    tft.drawPixel(cx - hw,     cy - 1, c);
+    tft.drawPixel(cx + hw,     cy - 1, c);
+}
+
+// Smile arc (upturned mouth).
+static void mouth_smile(int cx, int cy, int w = 30, int h = 8, uint16_t c = C_WHITE) {
+    for (int dx = -w / 2; dx <= w / 2; dx++) {
+        float t = (float)dx / (w / 2.0f);
+        int dy = (int)(h * (1.0f - t * t));
+        for (int s = 0; s < 2; s++) tft.drawPixel(cx + dx, cy - dy + s, c);
+    }
+}
+
+// Frown arc (downturned mouth).
+static void mouth_frown(int cx, int cy, int w = 30, int h = 10, uint16_t c = C_WHITE) {
+    for (int dx = -w / 2; dx <= w / 2; dx++) {
+        float t = (float)dx / (w / 2.0f);
+        int dy = (int)(h * (1.0f - t * t));
+        for (int s = 0; s < 2; s++) tft.drawPixel(cx + dx, cy + dy - s, c);
+    }
+}
+
+// Underscore _.
+static void mouth_line(int cx, int cy, int w = 24, uint16_t c = C_WHITE) {
+    tft.fillRect(cx - w / 2, cy, w, 3, c);
+}
+
+// 益-style gritted teeth — grid of small rectangles.
+static void mouth_gritted(int cx, int cy, int w = 50, int h = 12, uint16_t c = C_WHITE) {
+    int x0 = cx - w / 2;
+    tft.drawLine(x0, cy,         x0 + w, cy,         c);
+    tft.drawLine(x0, cy + h,     x0 + w, cy + h,     c);
+    tft.drawLine(x0, cy + 1,     x0 + w, cy + 1,     c);
+    tft.drawLine(x0, cy + h - 1, x0 + w, cy + h - 1, c);
+    // Vertical separators
+    for (int i = 0; i <= 5; i++) {
+        int x = x0 + i * (w / 5);
+        tft.drawLine(x, cy, x, cy + h, c);
+    }
+}
+
+// Tiny o-shape mouth.
+static void mouth_o(int cx, int cy, int r = 6, uint16_t c = C_WHITE) {
+    tft.drawCircle(cx, cy, r, c);
+    tft.drawCircle(cx, cy, r - 1, c);
+}
+
+// ─── Decorations ────────────────────────────────────────────────────────
+
+static void draw_tears(int cx, int cy_eye) {
+    // teardrop hanging below the eye
+    tft.fillCircle(cx, cy_eye + 28, 5, C_BLUE);
+    tft.fillTriangle(cx - 5, cy_eye + 26, cx + 5, cy_eye + 26, cx, cy_eye + 12, C_BLUE);
+    // a second smaller drop trailing
+    tft.fillCircle(cx + 8, cy_eye + 42, 3, C_BLUE);
+}
+
+static void draw_blush(int cx, int cy, uint16_t c = C_PINK) {
+    tft.fillCircle(cx,     cy, 5, c);
+    tft.fillCircle(cx + 8, cy, 4, c);
+}
+
+static void draw_sparkles() {
+    // little dot-stars in the upper corners for the LOVE face
+    int xs[] = { 25, 50, 35, SCR_W - 25, SCR_W - 50, SCR_W - 35 };
+    int ys[] = { 20, 40, 60, 20, 40, 60 };
+    for (int i = 0; i < 6; i++) {
+        tft.fillCircle(xs[i], ys[i], 2, C_PINK);
+    }
+}
+
+static void draw_zzz() {
+    tft.setTextColor(C_WHITE);
+    tft.setTextSize(2);
+    tft.setCursor(SCR_W - 70, 30); tft.print("z");
+    tft.setTextSize(3);
+    tft.setCursor(SCR_W - 55, 20); tft.print("Z");
+    tft.setTextSize(2);
+    tft.setCursor(SCR_W - 30, 14); tft.print("z");
+}
+
+static void draw_arms_up() {
+    // ノ ノ — two diagonal arms thrown up from the lower edge
+    for (int t = 0; t < 3; t++) {
+        tft.drawLine(30 + t, 160, 55 + t, 100, C_WHITE);
+        tft.drawLine(SCR_W - 30 - t, 160, SCR_W - 55 - t, 100, C_WHITE);
+    }
+    // little hand "fists"
+    tft.fillCircle(55, 98, 4, C_WHITE);
+    tft.fillCircle(SCR_W - 55, 98, 4, C_WHITE);
+}
+
+static void draw_motion_lines() {
+    // 彡 — diagonal speed strokes between face and table
+    for (int i = 0; i < 4; i++) {
+        int y0 = 35 + i * 12;
+        tft.drawLine(SCR_W - 100, y0,     SCR_W - 80, y0 - 8, C_ORANGE);
+        tft.drawLine(SCR_W - 100, y0 + 1, SCR_W - 80, y0 - 7, C_ORANGE);
+    }
+}
+
+static void draw_flying_table() {
+    // ┻━┻ flung at an angle in the upper-right corner
+    int tx = SCR_W - 70, ty = 18;
+    tft.fillRect(tx, ty, 50, 5, C_BROWN);
+    tft.fillRect(tx + 10, ty + 5, 5, 16, C_BROWN);
+    tft.fillRect(tx + 35, ty + 5, 5, 16, C_BROWN);
+    // motion line off the right edge
+    tft.drawLine(tx + 50, ty + 2,  tx + 60, ty - 6,  C_BROWN);
+    tft.drawLine(tx + 50, ty + 3,  tx + 60, ty - 5,  C_BROWN);
+}
+
+// ─── Render ─────────────────────────────────────────────────────────────
 static void render() {
-    uint16_t bg = ST77XX_BLACK;
-    if      (s_face == F_HAPPY)   bg = 0x0220;
-    else if (s_face == F_SAD)     bg = 0x0008;
-    else if (s_face == F_ANGRY)   bg = 0x2000;
-    else if (s_face == F_WALK)    bg = 0x0010;   // dark blue tint
-    fill_bg(bg);
+    uint16_t bg = C_BLACK;
+    switch (s_face) {
+        case F_HAPPY:      bg = 0x0220; break;
+        case F_SAD:        bg = 0x0008; break;
+        case F_CRY:        bg = 0x0010; break;
+        case F_ANGRY:      bg = 0x2000; break;
+        case F_LOVE:       bg = 0x4924; break;   // dark plum
+        case F_SLEEP:      bg = C_BLACK; break;
+        case F_WALK:       bg = 0x0010; break;
+        case F_TABLE_FLIP: bg = 0x2000; break;   // angry-red tinted
+        default:           bg = C_BLACK;
+    }
+    tft.fillScreen(bg);
 
     if (s_blink_on) {
-        draw_eyes(80, 4, 60, 0, 0, ST77XX_WHITE, ST77XX_BLACK, false);
+        eye_closed(EYE_L_X, EYE_Y);
+        eye_closed(EYE_R_X, EYE_Y);
         return;
+    }
+
+    // Glance offsets (only the IDLE-ish faces with pupils respect these)
+    int gx = 0, gy = 0;
+    if (s_face == F_IDLE || s_face == F_SAD || s_face == F_CURIOUS) {
+        gx = s_glance_x;
+        gy = s_glance_y;
     }
 
     switch (s_face) {
         case F_HAPPY:
-            // Squinty arc-eyes — small, looking up
-            draw_eyes(50, 30, 60, 0, 0, ST77XX_WHITE, ST77XX_BLACK, false);
-            // Tiny pupils that respect the glance state
-            tft.fillCircle(100 + s_glance_x,           60 + s_glance_y, 6, ST77XX_BLACK);
-            tft.fillCircle(SCR_W - 100 + s_glance_x,   60 + s_glance_y, 6, ST77XX_BLACK);
-            draw_smile(SCR_W / 2, 110, 30, ST77XX_WHITE);
-            tft.fillCircle(60, 110, 8, 0xF800);
-            tft.fillCircle(SCR_W - 60, 110, 8, 0xF800);
+            // (^ω^)
+            eye_caret(EYE_L_X, EYE_Y);
+            eye_caret(EYE_R_X, EYE_Y);
+            mouth_omega(SCR_W / 2, 130);
+            draw_blush(50, 110);
+            draw_blush(SCR_W - 65, 110);
             break;
 
         case F_SAD:
-            draw_eyes(60, 40, 60, s_glance_x, s_glance_y, 0x6F1F, ST77XX_BLACK, true);
-            draw_frown(SCR_W / 2, 150, 25, ST77XX_WHITE);
-            tft.fillCircle(80, 105, 4, 0x041F);
+            // (︶︹︶)
+            eye_arc_down(EYE_L_X, EYE_Y - 5);
+            eye_arc_down(EYE_R_X, EYE_Y - 5);
+            mouth_frown(SCR_W / 2, 125, 38, 12);
             break;
 
-        case F_ANGRY: {
-            draw_eyes(70, 22, 60, 0, 0, ST77XX_WHITE, ST77XX_BLACK, true);
-            tft.drawLine( 70, 50, 130, 65, ST77XX_RED);
-            tft.drawLine( 70, 51, 130, 66, ST77XX_RED);
-            tft.drawLine(SCR_W - 70, 50, SCR_W - 130, 65, ST77XX_RED);
-            tft.drawLine(SCR_W - 70, 51, SCR_W - 130, 66, ST77XX_RED);
-            tft.drawLine(SCR_W / 2 - 25, 135, SCR_W / 2 + 25, 135, ST77XX_WHITE);
-            tft.drawLine(SCR_W / 2 - 25, 135, SCR_W / 2 - 32, 142, ST77XX_WHITE);
-            tft.drawLine(SCR_W / 2 + 25, 135, SCR_W / 2 + 32, 142, ST77XX_WHITE);
+        case F_CRY:
+            // (T_T)
+            eye_t(EYE_L_X, EYE_Y);
+            eye_t(EYE_R_X, EYE_Y);
+            mouth_line(SCR_W / 2, 135, 22);
+            draw_tears(EYE_L_X, EYE_Y);
+            draw_tears(EYE_R_X, EYE_Y);
             break;
-        }
+
+        case F_ANGRY:
+            // (ಠ益ಠ)
+            eye_glare(EYE_L_X, EYE_Y);
+            eye_glare(EYE_R_X, EYE_Y);
+            mouth_gritted(SCR_W / 2, 125, 50, 12);
+            break;
+
+        case F_LOVE:
+            // (♡μ_μ)
+            eye_heart(EYE_L_X, EYE_Y - 4);
+            eye_heart(EYE_R_X, EYE_Y - 4);
+            mouth_smile(SCR_W / 2, 130, 22, 6, C_PINK);
+            draw_sparkles();
+            break;
 
         case F_SLEEP:
-            for (int i = 0; i < 2; i++) {
-                int cx = (i == 0) ? 100 : SCR_W - 100;
-                tft.drawLine(cx - 22, 90, cx - 10, 96, ST77XX_WHITE);
-                tft.drawLine(cx - 10, 96, cx + 10, 96, ST77XX_WHITE);
-                tft.drawLine(cx + 10, 96, cx + 22, 90, ST77XX_WHITE);
-            }
-            tft.setTextColor(ST77XX_WHITE);
-            tft.setTextSize(2);
-            tft.setCursor(SCR_W - 70, 30);
-            tft.print("z");
-            tft.setTextSize(3);
-            tft.setCursor(SCR_W - 55, 20);
-            tft.print("Z");
-            tft.setTextSize(2);
-            tft.setCursor(SCR_W - 30, 14);
-            tft.print("z");
+            // (=_=) zZz
+            eye_closed(EYE_L_X, EYE_Y, 30);
+            eye_closed(EYE_R_X, EYE_Y, 30);
+            mouth_line(SCR_W / 2, 130, 18, C_GRAY);
+            draw_zzz();
             break;
 
         case F_SEARCH:
-            draw_eyes(55, 50, 60, s_search_off, 0, ST77XX_WHITE, ST77XX_BLACK, true);
-            tft.drawCircle(SCR_W / 2, 130, 7, ST77XX_WHITE);
+            // (•_•) panning pupils
+            eye_dot(EYE_L_X, EYE_Y, s_search_off, 0);
+            eye_dot(EYE_R_X, EYE_Y, s_search_off, 0);
+            mouth_o(SCR_W / 2, 130, 5);
             break;
 
         case F_CURIOUS:
-            draw_eyes(60, 40, 60, s_glance_x, s_glance_y, ST77XX_WHITE, ST77XX_BLACK, true);
-            tft.drawLine(SCR_W - 130, 50, SCR_W - 70, 38, ST77XX_WHITE);
-            tft.drawLine(SCR_W - 130, 51, SCR_W - 70, 39, ST77XX_WHITE);
-            tft.drawCircle(SCR_W / 2, 130, 6, ST77XX_WHITE);
+            // (?_?)
+            eye_question(EYE_L_X, EYE_Y);
+            eye_question(EYE_R_X, EYE_Y);
+            mouth_o(SCR_W / 2, 130, 4);
             break;
 
         case F_WALK: {
-            // Gentle vertical bounce + forward-looking pupils + small open mouth
             int bounce = s_walk_phase ? 4 : -4;
-            draw_eyes(60 + bounce, 40, 60, 0, 0, ST77XX_WHITE, ST77XX_BLACK, false);
-            tft.fillCircle(100,           80 + bounce, 8, ST77XX_BLACK);
-            tft.fillCircle(SCR_W - 100,   80 + bounce, 8, ST77XX_BLACK);
-            // open mouth (slight smile, like a happy walk)
-            tft.fillRoundRect(SCR_W / 2 - 12, 128 + bounce, 24, 9, 4, ST77XX_WHITE);
-            // tiny tongue
-            tft.fillRoundRect(SCR_W / 2 - 4, 132 + bounce, 8, 6, 3, 0xF800);
+            eye_dot(EYE_L_X, EYE_Y + bounce);
+            eye_dot(EYE_R_X, EYE_Y + bounce);
+            mouth_smile(SCR_W / 2, 130 + bounce, 25, 6);
+            tft.fillRoundRect(SCR_W / 2 - 4, 132 + bounce, 8, 6, 3, C_RED);  // tiny tongue
             break;
         }
 
+        case F_TABLE_FLIP:
+            // (ノಠ益ಠ)ノ彡┻━┻
+            eye_glare(EYE_L_X + 10, EYE_Y + 10);
+            eye_glare(EYE_R_X - 10, EYE_Y + 10);
+            mouth_gritted(SCR_W / 2, 130, 50, 12);
+            draw_arms_up();
+            draw_motion_lines();
+            draw_flying_table();
+            break;
+
         case F_IDLE:
         default:
-            draw_eyes(60, 40, 60, s_glance_x, s_glance_y, ST77XX_WHITE, ST77XX_BLACK, true);
-            tft.drawLine(SCR_W / 2 - 18, 130, SCR_W / 2 + 18, 130, ST77XX_WHITE);
+            // (·_·)
+            eye_dot(EYE_L_X, EYE_Y, gx, gy);
+            eye_dot(EYE_R_X, EYE_Y, gx, gy);
+            mouth_line(SCR_W / 2, 130, 24);
             break;
     }
 }
 
 static const char* face_name(FaceMode f) {
     switch (f) {
-        case F_IDLE:    return "IDLE";
-        case F_HAPPY:   return "HAPPY";
-        case F_SAD:     return "SAD";
-        case F_ANGRY:   return "ANGRY";
-        case F_SLEEP:   return "SLEEP";
-        case F_SEARCH:  return "SEARCH";
-        case F_CURIOUS: return "CURIOUS";
-        case F_WALK:    return "WALK";
-        default:        return "?";
+        case F_IDLE:       return "IDLE";
+        case F_HAPPY:      return "HAPPY";
+        case F_SAD:        return "SAD";
+        case F_CRY:        return "CRY";
+        case F_ANGRY:      return "ANGRY";
+        case F_LOVE:       return "LOVE";
+        case F_SLEEP:      return "SLEEP";
+        case F_SEARCH:     return "SEARCH";
+        case F_CURIOUS:    return "CURIOUS";
+        case F_WALK:       return "WALK";
+        case F_TABLE_FLIP: return "TABLE_FLIP";
+        default:           return "?";
     }
 }
 
 static bool parse_face(const String& s, FaceMode& out) {
-    if      (s == "IDLE")    out = F_IDLE;
-    else if (s == "HAPPY")   out = F_HAPPY;
-    else if (s == "SAD")     out = F_SAD;
-    else if (s == "ANGRY")   out = F_ANGRY;
-    else if (s == "SLEEP")   out = F_SLEEP;
-    else if (s == "SEARCH")  out = F_SEARCH;
-    else if (s == "CURIOUS") out = F_CURIOUS;
-    else if (s == "WALK")    out = F_WALK;
+    if      (s == "IDLE")       out = F_IDLE;
+    else if (s == "HAPPY")      out = F_HAPPY;
+    else if (s == "SAD")        out = F_SAD;
+    else if (s == "CRY")        out = F_CRY;
+    else if (s == "ANGRY")      out = F_ANGRY;
+    else if (s == "LOVE")       out = F_LOVE;
+    else if (s == "SLEEP")      out = F_SLEEP;
+    else if (s == "SEARCH")     out = F_SEARCH;
+    else if (s == "CURIOUS")    out = F_CURIOUS;
+    else if (s == "WALK")       out = F_WALK;
+    else if (s == "TABLE_FLIP" || s == "FLIP") out = F_TABLE_FLIP;
     else return false;
     return true;
 }
@@ -292,26 +505,22 @@ static void pump_serial(Stream& port) {
 }
 
 void setup() {
-    Serial.begin(115200);   // USB CDC (when "USB CDC On Boot" = Enabled)
+    Serial.begin(115200);
     delay(200);
-    Serial.println("\n=== PetBot C6 face booting ===");
+    Serial.println("\n=== Marvin C6 face booting ===");
 
-    // To later receive commands from the body MCU over UART (3 wires),
-    // wire Body TX → C6 GPIO 16 (Serial1 RX) and Body GND → C6 GND,
-    // then uncomment the line below:
+    // For wired bot→C6 link later:
     // Serial1.begin(115200, SERIAL_8N1, /*rx*/16, /*tx*/17);
 
-    // Backlight on a PWM channel at ~30% brightness. Drops board-warmth
-    // a lot vs. driving the BL pin fully high. If you need it brighter,
-    // raise the second arg of ledcWrite() up to 255.
-    ledcAttach(TFT_BL, 5000 /*Hz*/, 8 /*-bit*/);
-    ledcWrite(TFT_BL, 80);   // 0–255, ~30%
+    // Backlight PWM (v3.x API).
+    ledcAttach(TFT_BL, 5000, 8);
+    ledcWrite(TFT_BL, 80);                  // ~30% — runs cooler than full-on
 
     SPI.begin(TFT_SCLK, /*MISO*/ -1, TFT_MOSI, TFT_CS);
     tft.init(SCR_H, SCR_W);
     tft.setRotation(1);
-    tft.fillScreen(ST77XX_BLACK);
-    tft.setTextColor(ST77XX_WHITE);
+    tft.fillScreen(C_BLACK);
+    tft.setTextColor(C_WHITE);
 
     render();
 
@@ -321,16 +530,16 @@ void setup() {
     s_next_search = now + 500;
     s_next_walk   = now + 200;
 
-    Serial.println("ready — try: FACE:WALK  /  FACE:IDLE  /  FACE:HAPPY  /  FACE:BLINK");
+    Serial.println("ready — try: FACE:HAPPY  FACE:WALK  FACE:TABLE_FLIP  FACE:LOVE");
 }
 
 void loop() {
     pump_serial(Serial);
-    // pump_serial(Serial1);   // uncomment after wiring body TX → C6 RX
+    // pump_serial(Serial1);    // uncomment after wiring body TX → C6 RX
 
     uint32_t now = millis();
 
-    // ─── Blink (end-of-blink) ────────────────────────────────────────
+    // End-of-blink
     if (s_blink_on && now >= s_blink_until) {
         s_blink_on = false;
         s_next_blink = now + 2500 + random(0, 2000);
@@ -340,20 +549,18 @@ void loop() {
     bool glance_face =
         (s_face == F_IDLE || s_face == F_HAPPY || s_face == F_CURIOUS || s_face == F_SAD);
 
-    // ─── Blink scheduler ─────────────────────────────────────────────
+    // Blink scheduler
     if (glance_face && !s_blink_on && now >= s_next_blink) {
         s_blink_on = true;
         s_blink_until = now + 130;
         render();
     }
 
-    // ─── Idle-glance scheduler ───────────────────────────────────────
+    // Idle glance
     if (glance_face && !s_blink_on) {
-        // Time to start a new glance?
         if (s_glance_x == 0 && s_glance_y == 0 && now >= s_next_glance) {
-            // Pick a random direction. Keeps within a sensible eye box.
             static const int8_t DIRS[][2] = {
-                {-14,  0}, {14,  0}, {0, -7}, {-12, -5}, {12, -5}, {-10, 5}, {10, 5}
+                {-12,  0}, {12,  0}, {0, -6}, {-10, -5}, {10, -5}, {-9, 5}, {9, 5},
             };
             const int N = sizeof(DIRS) / sizeof(DIRS[0]);
             int i = random(0, N);
@@ -362,16 +569,14 @@ void loop() {
             s_glance_clear = now + 500 + random(0, 600);
             s_next_glance  = now + 3500 + random(0, 3500);
             render();
-        }
-        // Time to return the pupils to center?
-        else if ((s_glance_x || s_glance_y) && now >= s_glance_clear) {
+        } else if ((s_glance_x || s_glance_y) && now >= s_glance_clear) {
             s_glance_x = 0;
             s_glance_y = 0;
             render();
         }
     }
 
-    // ─── Search-eye pan ──────────────────────────────────────────────
+    // Search pan
     if (s_face == F_SEARCH && !s_blink_on && now >= s_next_search) {
         s_search_off += s_search_dir * 6;
         if (s_search_off >  18) s_search_dir = -1;
@@ -380,7 +585,7 @@ void loop() {
         render();
     }
 
-    // ─── Walk bounce ─────────────────────────────────────────────────
+    // Walk bounce
     if (s_face == F_WALK && !s_blink_on && now >= s_next_walk) {
         s_walk_phase ^= 1;
         s_next_walk = now + 200;
