@@ -280,8 +280,12 @@ void setup() {
     // then uncomment the line below:
     // Serial1.begin(115200, SERIAL_8N1, /*rx*/16, /*tx*/17);
 
-    pinMode(TFT_BL, OUTPUT);
-    digitalWrite(TFT_BL, HIGH);
+    // Backlight on a PWM channel at ~30% brightness. Drops board-warmth
+    // a lot vs. driving the BL pin fully high. If you need it brighter,
+    // raise the second arg of ledcWrite() up to 255.
+    // (Arduino-ESP32 v3.x API — v2.x would use ledcSetup + ledcAttachPin.)
+    ledcAttach(TFT_BL, 5000 /*Hz*/, 8 /*-bit*/);
+    ledcWrite(TFT_BL, 80);   // 0–255, ~30%
 
     SPI.begin(TFT_SCLK, /*MISO*/ -1, TFT_MOSI, TFT_CS);
     tft.init(SCR_H, SCR_W);     // native portrait dims

@@ -51,14 +51,13 @@
 #define I2C_SCL       14
 #define PCA9685_ADDR  0x40
 
-// Freenove default servo channel layout
-const uint8_t LEG_CH[12]   = { 0, 1, 2,  5, 6, 7,  8, 9, 10, 13, 14, 15 };
-const char*   LEG_NAME[12] = {
-    "FL hip", "FL thigh", "FL calf",
-    "FR hip", "FR thigh", "FR calf",
-    "BL hip", "BL thigh", "BL calf",
-    "BR hip", "BR thigh", "BR calf",
-};
+// Channels used by the Freenove robot dog. The leg→channel mapping
+// varies between kit revisions / how the user has plugged the servo
+// connectors into the PCA9685, so we don't label them by physical leg
+// here. Use the "Wiggle" buttons to identify which physical joint each
+// channel drives, then tell me the mapping and I'll bake labels into
+// petbot.ino.
+const uint8_t LEG_CH[12] = { 0, 1, 2,  5, 6, 7,  8, 9, 10, 13, 14, 15 };
 
 static Adafruit_PWMServoDriver pca(PCA9685_ADDR);
 static uint16_t s_us[16] = {0};
@@ -89,21 +88,24 @@ static const char PAGE_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
 body{background:#0a0a14;color:#e7e9ee;margin:0 auto;padding:14px;max-width:560px}
 h1{color:#e94560;margin:6px 0 4px;font-size:18px;text-align:center}
 .hint{font-size:12px;color:#9aa0b4;line-height:1.5;margin:6px 0 12px}
-.leg{background:#0f1322;border:1px solid #1f2236;border-radius:8px;padding:10px;margin-bottom:10px}
-.leg h3{margin:0 0 6px;font-size:12px;color:#e94560;text-transform:uppercase;letter-spacing:.06em}
-.row{display:flex;align-items:center;gap:8px;margin:6px 0}
-.row label{font-size:13px;flex:0 0 70px;color:#9aa0b4}
-.row input[type=range]{flex:1;accent-color:#e94560}
+.row{display:flex;align-items:center;gap:6px;margin:6px 0;padding:8px;background:#0f1322;border:1px solid #1f2236;border-radius:8px}
+.row .ch{font:bold 14px ui-monospace,monospace;color:#e94560;flex:0 0 48px;text-align:center}
+.row input[type=range]{flex:1;accent-color:#e94560;min-width:0}
 .row .us{font:12px ui-monospace,monospace;color:#9aa0b4;min-width:42px;text-align:right}
 .row button{padding:6px 10px;background:#16213e;color:#fff;border:1px solid #1f2236;border-radius:6px;font-size:12px;cursor:pointer}
+.row button.w{background:#2a5;border-color:#2a5}
 .actions{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
 .actions button{flex:1;min-width:120px;padding:12px;background:#16213e;color:#fff;border:2px solid #1f2236;border-radius:8px;font-size:14px;cursor:pointer}
 .actions button.primary{background:#e94560;border-color:#e94560}
-pre#out{background:#0f1322;border:1px solid #1f2236;border-radius:8px;padding:10px;color:#a0e0a0;font:12px ui-monospace,monospace;overflow-x:auto;white-space:pre-wrap;display:none}
+pre#out{background:#0f1322;border:1px solid #1f2236;border-radius:8px;padding:10px;color:#a0e0a0;font:12px ui-monospace,monospace;overflow-x:auto;white-space:pre-wrap;display:none;margin-top:8px}
 .copy{display:none;margin-top:6px}
 </style></head><body>
 <h1>PetBot calibration</h1>
-<p class="hint">Per leg: tap <b>Release</b> → move the leg with your hand to where it should sit. Drag the slider until the servo "grabs" at that position. Repeat for all 12 servos. When the dog stands cleanly, tap <b>Show home values</b> and paste the output into petbot.ino.</p>
+<p class="hint">
+  <b>Step 1 — identify each channel.</b> Tap the green <b>Wiggle</b> button on each row in turn. The servo will briefly twitch. Note down which physical joint (hip/thigh/calf) of which leg (front-left / front-right / back-left / back-right) responds. Send me your mapping in this format:<br>
+  <code>ch 0 = FR hip, ch 1 = FR thigh, ch 2 = FR calf, …</code><br><br>
+  <b>Step 2 — find the home pulse-widths.</b> Tap <b>Release</b> on a channel → physically move that joint where it should sit in a clean standing pose → drag the slider until the servo grabs at that position. Repeat for all 12. When the dog stands cleanly, tap <b>Show home values</b> and paste the output back to me.
+</p>
 
 <div id="legs"></div>
 
@@ -118,40 +120,31 @@ pre#out{background:#0f1322;border:1px solid #1f2236;border-radius:8px;padding:10
 
 <script>
 const $=id=>document.getElementById(id);
-const LEGS=[
-  ['Front-Left',  [['hip',0],['thigh',1],['calf',2]]],
-  ['Front-Right', [['hip',5],['thigh',6],['calf',7]]],
-  ['Back-Left',   [['hip',8],['thigh',9],['calf',10]]],
-  ['Back-Right',  [['hip',13],['thigh',14],['calf',15]]],
-];
-const NAMES={0:'FL hip',1:'FL thigh',2:'FL calf',5:'FR hip',6:'FR thigh',7:'FR calf',8:'BL hip',9:'BL thigh',10:'BL calf',13:'BR hip',14:'BR thigh',15:'BR calf'};
+const CHANNELS=[0,1,2,5,6,7,8,9,10,13,14,15];
 
 function build(){
   const root=$('legs'); root.innerHTML='';
-  LEGS.forEach(([gname, joints])=>{
-    const g=document.createElement('div'); g.className='leg';
-    g.innerHTML=`<h3>${gname}</h3>`;
-    joints.forEach(([jname, ch])=>{
-      const row=document.createElement('div'); row.className='row';
-      row.innerHTML=`
-        <label>${jname}</label>
-        <input type="range" min="500" max="2500" value="1500" data-ch="${ch}">
-        <span class="us" id="u${ch}">1500</span>
-        <button onclick="r(${ch})">Release</button>`;
-      const slider=row.querySelector('input');
-      slider.oninput=e=>{
-        const v=parseInt(e.target.value);
-        $('u'+ch).textContent=v;
-        fetch(`/servo?ch=${ch}&us=${v}`);
-      };
-      g.appendChild(row);
-    });
-    root.appendChild(g);
+  CHANNELS.forEach(ch=>{
+    const row=document.createElement('div'); row.className='row';
+    row.innerHTML=`
+      <span class="ch">ch ${ch}</span>
+      <input type="range" min="500" max="2500" value="1500" data-ch="${ch}">
+      <span class="us" id="u${ch}">1500</span>
+      <button class="w" onclick="wig(${ch})">Wiggle</button>
+      <button onclick="r(${ch})">Release</button>`;
+    const slider=row.querySelector('input');
+    slider.oninput=e=>{
+      const v=parseInt(e.target.value);
+      $('u'+ch).textContent=v;
+      fetch(`/servo?ch=${ch}&us=${v}`);
+    };
+    root.appendChild(row);
   });
 }
 build();
 
 function r(ch){fetch('/release?ch='+ch)}
+function wig(ch){fetch('/wiggle?ch='+ch)}
 function releaseAll(){fetch('/release_all')}
 function centerAll(){
   document.querySelectorAll('input[type=range]').forEach(s=>{
@@ -162,14 +155,14 @@ function centerAll(){
 
 function showHome(){
   fetch('/home').then(r=>r.json()).then(j=>{
-    let s = '// Paste into petbot.ino, replacing the default home values:\n';
-    s += 'static const uint16_t HOME_US[12] = {\n';
-    [0,1,2,5,6,7,8,9,10,13,14,15].forEach(ch=>{
+    let s = '// Pulse-widths from calibration (raw — no leg labels yet).\n';
+    s += '// Tell me which physical leg+joint each channel drives and I will\n';
+    s += '// bake the leg-labelled HOME_US[] into petbot.ino.\n';
+    s += 'channel -> pulse:\n';
+    CHANNELS.forEach(ch=>{
       const us = j[ch] || 1500;
-      const name = NAMES[ch].padEnd(9);
-      s += `    /* ${name} ch ${String(ch).padStart(2)} */ ${us},\n`;
+      s += `  ch ${String(ch).padStart(2)} : ${us} µs\n`;
     });
-    s += '};\n';
     $('out').textContent = s;
     $('out').style.display = 'block';
     $('copy').style.display = 'inline-block';
@@ -229,6 +222,23 @@ static esp_err_t h_release_all(httpd_req_t* r) {
     return ESP_OK;
 }
 
+// Twitch the servo so the user can identify which physical joint it is:
+//   1500 → 1700 → 1300 → restore. Total ~600 ms.
+static esp_err_t h_wiggle(httpd_req_t* r) {
+    char q[32] = {};
+    int ch = -1;
+    if (httpd_req_get_url_query_str(r, q, sizeof(q)) == ESP_OK) get_q_int(q, "ch", &ch);
+    if (ch < 0 || ch > 15) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "ch");
+    uint16_t saved = s_us[ch];
+    servo_set_us((uint8_t)ch, 1500); delay(80);
+    servo_set_us((uint8_t)ch, 1700); delay(160);
+    servo_set_us((uint8_t)ch, 1300); delay(160);
+    servo_set_us((uint8_t)ch, saved);
+    Serial.printf("[wiggle] ch %d twitched\n", ch);
+    httpd_resp_sendstr(r, "ok");
+    return ESP_OK;
+}
+
 static esp_err_t h_home(httpd_req_t* r) {
     char buf[320]; int n = 0;
     n += snprintf(buf + n, sizeof(buf) - n, "{");
@@ -281,6 +291,7 @@ void setup() {
         { "/servo",       HTTP_GET, h_servo,       nullptr },
         { "/release",     HTTP_GET, h_release,     nullptr },
         { "/release_all", HTTP_GET, h_release_all, nullptr },
+        { "/wiggle",      HTTP_GET, h_wiggle,      nullptr },
         { "/home",        HTTP_GET, h_home,        nullptr },
     };
     for (auto& u : routes) httpd_register_uri_handler(s_httpd, &u);
