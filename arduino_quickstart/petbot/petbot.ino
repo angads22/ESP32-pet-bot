@@ -232,6 +232,16 @@ input[type=text],input[type=password]{width:100%;padding:10px;background:#16213e
     <button onclick="c('SIT')">Sit</button>
     <button onclick="c('HOME')">Home</button>
   </div>
+  <h3 style="margin:18px 0 6px;font-size:12px;color:#e94560;text-transform:uppercase;letter-spacing:.06em">Face</h3>
+  <div class="actions">
+    <button onclick="f('IDLE')">idle</button>
+    <button onclick="f('HAPPY')">happy</button>
+    <button onclick="f('SAD')">sad</button>
+    <button onclick="f('ANGRY')">angry</button>
+    <button onclick="f('SLEEP')">sleep</button>
+    <button onclick="f('SEARCH')">search</button>
+    <button onclick="f('CURIOUS')">curious</button>
+  </div>
 </section>
 
 <section id="tab-calib" class="tab">
@@ -277,6 +287,7 @@ function camOff(){ $('cam').style.display='none'; $('cam-off').style.display='fl
 // HTTP helpers
 function fetchTxt(url){return fetch(url).then(r=>r.text())}
 function c(cmd){return fetchTxt('/cmd?c='+encodeURIComponent(cmd))}
+function f(face){return fetchTxt('/face?n='+encodeURIComponent(face))}
 
 // Status pill
 function refreshStatus(){
@@ -488,6 +499,26 @@ static esp_err_t handle_home(httpd_req_t* r) {
     return ESP_OK;
 }
 
+// Emit a FACE:NAME command to the C6 head display. Today it prints to
+// Serial (so you can see it in the Arduino IDE monitor and paste it to
+// the C6's serial monitor for testing). When you wire the bot's UART
+// TX to the C6's Serial1 RX (3 wires + GND), also call Serial2.println
+// here — Serial2 begin() in setup() with appropriate free GPIOs.
+static esp_err_t handle_face(httpd_req_t* r) {
+    char q[64] = {};
+    char nameBuf[24] = {};
+    if (httpd_req_get_url_query_str(r, q, sizeof(q)) == ESP_OK)
+        httpd_query_key_value(q, "n", nameBuf, sizeof(nameBuf));
+    if (!nameBuf[0]) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "need n=NAME");
+    // Send the line in the format the C6 sketch expects.
+    Serial.print("FACE:"); Serial.println(nameBuf);
+    // Serial2.print("FACE:"); Serial2.println(nameBuf);   // enable after wiring
+    char reply[40];
+    snprintf(reply, sizeof(reply), "ok face=%s", nameBuf);
+    httpd_resp_sendstr(r, reply);
+    return ESP_OK;
+}
+
 static esp_err_t handle_status(httpd_req_t* r) {
     char buf[160] = {};
     snprintf(buf, sizeof(buf),
@@ -642,6 +673,7 @@ static void init_http() {
         { "/load_home",   HTTP_GET, handle_load_home,    nullptr },
         { "/home",        HTTP_GET, handle_home,         nullptr },
         { "/status",      HTTP_GET, handle_status,       nullptr },
+        { "/face",        HTTP_GET, handle_face,         nullptr },
         { "/set_wifi",    HTTP_GET, handle_set_wifi,     nullptr },
         { "/joy",         HTTP_GET, handle_cmd,          nullptr },  // accepted; gait wires in 1.3
     };

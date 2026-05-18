@@ -12,15 +12,24 @@ to see the bot boot, broadcast a WiFi AP, and serve the live camera.
 
 ```
 arduino_quickstart/
-  README.md            ← you are here
-  petbot/
-    petbot.ino         ← open this in Arduino IDE
+  README.md             ← you are here
+  petbot/               ← body firmware (ESP32-CAM)
+    petbot.ino
+  petbot_c6/            ← head display firmware (ESP32-C6-LCD-1.47)
+    petbot_c6.ino
 ```
 
-The sketch defaults to the **Freenove ESP32-WROVER CAM Board**
-(classic ESP32, OV2640, micro-USB). A commented-out pin block at the
-top of the `.ino` switches it to the **Freenove ESP32-S3 WROOM CAM**
-if that's what you have — see "Which board do I have?" below.
+**`petbot/petbot.ino`** runs on the body MCU (Freenove ESP32-WROVER CAM
+classic, or Freenove ESP32-S3 WROOM CAM with the alt pin block).
+Provides: WiFi AP, web UI, live camera, 12-servo calibration over
+PCA9685, NVS-backed home pose, WiFi-mode toggle, FACE buttons.
+
+**`petbot_c6/petbot_c6.ino`** runs on the head display (Waveshare
+ESP32-C6-LCD-1.47). Listens on Serial for `FACE:NAME` commands and
+renders animated expressions on the onboard ST7789 (172×320). For
+testing today: flash via USB-C, open Serial Monitor, type
+`FACE:HAPPY` + Enter. Later, wire body TX → C6 GPIO 16 (Serial1 RX)
+and uncomment the `Serial1.begin(...)` line in the C6 sketch.
 
 ## Setup (classic Freenove ESP32-WROVER CAM)
 
