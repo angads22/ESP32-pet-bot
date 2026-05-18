@@ -1,6 +1,7 @@
 // Target: ESP32-S3-CAM (brain)
-// USB CDC HOST stub. See top of transport_usbcdc.cpp for the full caveat
-// list and why this is intentionally not implemented yet.
+// USB CDC HOST stub. See the USB CDC section in
+// firmware/s3_cam_brain/petbot_s3.ino for the full caveat list and why
+// this is intentionally not implemented yet.
 
 #pragma once
 

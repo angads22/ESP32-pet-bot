@@ -436,8 +436,8 @@ void input_poll() {
 
 // Target: ESP32-C6-LCD-1.47 (thin display client)
 // UART implementation. Avoid the reserved display GPIOs (6, 7, 14, 15,
-// 21, 22) and the BOOT button (typically GPIO9); transport.cpp owns the
-// pin selection.
+// 21, 22) and the BOOT button (typically GPIO9); the transport selector
+// below owns the pin selection.
 
 #include "transport_uart.h"
 
@@ -476,7 +476,7 @@ size_t TransportUart::available() {
 //
 // We are not enabling that yet because:
 //   - The S3-side host implementation is also stubbed (see the matching
-//     transport_usbcdc.cpp in firmware/s3_cam_brain/src/transport/).
+//     section in firmware/s3_cam_brain/petbot_s3.ino).
 //     Bringing up only one half achieves nothing.
 //   - The handshake (PB_HELLO from the C6, PB_SET_MENU response from the
 //     S3) needs the full BRINGUP.md checklist re-run end-to-end on USB
@@ -560,7 +560,7 @@ void setup() {
     renderer_show_waiting();
 
     if (!transport().begin()) {
-        Serial.println("[transport] begin() FAILED — check transport.cpp build flag");
+        Serial.println("[transport] begin() FAILED — check PB_TRANSPORT_* build flags");
     }
 
     pb_decoder_init(&s_decoder, s_decoder_buf, sizeof(s_decoder_buf));
