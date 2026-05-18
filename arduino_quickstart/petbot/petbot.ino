@@ -1,7 +1,11 @@
 /*
  *  PetBot — Phase 1.1 single-file Arduino sketch
  *  ----------------------------------------------
- *  Board     : Freenove ESP32-S3 WROOM CAM
+ *  Board     : Freenove ESP32-WROVER CAM Board  (classic ESP32, OV2640)
+ *              — same pin map as the AI-Thinker ESP32-CAM clones.
+ *              For the newer Freenove ESP32-S3 WROOM CAM, see the
+ *              header note inside the camera-pin block below.
+ *
  *  What it does:
  *    1. Boots an open WPA2 WiFi AP   (SSID: PetBot_xxxx, password: petbot123)
  *    2. Serves a web app at          http://192.168.4.1/
@@ -14,21 +18,21 @@
  *       https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
  *  2. Tools → Board → Boards Manager → search "esp32" → install
  *     "esp32 by Espressif Systems" version ≥ 2.0.14.
- *  3. Tools → Board → ESP32 Arduino → "ESP32S3 Dev Module"
+ *  3. Tools → Board → ESP32 Arduino → "AI Thinker ESP32-CAM"
  *  4. Tools settings:
- *       USB CDC On Boot        : Enabled
- *       CPU Frequency          : 240MHz (WiFi)
- *       Flash Mode             : QIO 80MHz
- *       Flash Size             : 8MB (64Mb)        ← or 4MB if your board has 4MB
+ *       Flash Mode             : QIO
+ *       Flash Frequency        : 80MHz
  *       Partition Scheme       : Huge APP (3MB No OTA/1MB SPIFFS)
- *       PSRAM                  : OPI PSRAM
+ *       PSRAM                  : Enabled        (NOT "OPI PSRAM" — that is S3-only)
  *       Upload Speed           : 921600
- *  5. Plug in via USB-C (a DATA cable, not charge-only).
- *  6. Tools → Port → pick the new /dev/cu.usbmodem* or COMx
+ *  5. Plug in via micro-USB (data cable, not charge-only). The classic
+ *     Freenove WROVER CAM has a USB-UART bridge — no native USB.
+ *  6. Tools → Port → pick the new /dev/cu.usbserial-* or COMx
  *  7. Sketch → Upload.
  *
- *  If upload fails: hold BOOT, tap RESET, release BOOT, click Upload.
- *  After flashing it auto-resets. Open Tools → Serial Monitor at 115200.
+ *  If upload fails: hold BOOT (or short IO0 to GND), tap RST, release BOOT,
+ *  click Upload again. After flashing, hit RST once to start the sketch.
+ *  Open Tools → Serial Monitor at 115200.
  *
  *  ── Expected serial output ─────────────────────────────────────────────
  *    === PetBot Phase 1.1 booting ===
@@ -37,7 +41,7 @@
  *    [http] up
  *    === PetBot ready ===
  *
- *  This sketch is the standalone equivalent of the "petbot_s3_ap" env in
+ *  This sketch is the standalone equivalent of the petbot_s3_ap env in
  *  the PlatformIO build. The PlatformIO build is the canonical version
  *  (modular C++, BLE NUS, gait engine to come). Use whichever you prefer.
  */
@@ -46,23 +50,44 @@
 #include "esp_http_server.h"
 #include "esp_camera.h"
 
-// ─── Freenove ESP32-S3 WROOM CAM camera pin map ─────────────────────────
-#define CAM_PWDN   -1
+// ─── Camera pin map ─────────────────────────────────────────────────────
+// Default below = Freenove ESP32-WROVER CAM / AI-Thinker ESP32-CAM
+// (classic ESP32). If you have the newer Freenove ESP32-S3 WROOM CAM
+// instead, comment out this block and use:
+//   #define CAM_PWDN   -1
+//   #define CAM_RESET  -1
+//   #define CAM_XCLK   15
+//   #define CAM_SIOD    4
+//   #define CAM_SIOC    5
+//   #define CAM_D7     16
+//   #define CAM_D6     17
+//   #define CAM_D5     18
+//   #define CAM_D4     12
+//   #define CAM_D3     10
+//   #define CAM_D2      8
+//   #define CAM_D1      9
+//   #define CAM_D0     11
+//   #define CAM_VSYNC   6
+//   #define CAM_HREF    7
+//   #define CAM_PCLK   13
+// (and switch Tools → Board to "ESP32S3 Dev Module", PSRAM to "OPI PSRAM".)
+
+#define CAM_PWDN   32
 #define CAM_RESET  -1
-#define CAM_XCLK   15
-#define CAM_SIOD    4
-#define CAM_SIOC    5
-#define CAM_D7     16
-#define CAM_D6     17
-#define CAM_D5     18
-#define CAM_D4     12
-#define CAM_D3     10
-#define CAM_D2      8
-#define CAM_D1      9
-#define CAM_D0     11
-#define CAM_VSYNC   6
-#define CAM_HREF    7
-#define CAM_PCLK   13
+#define CAM_XCLK    0
+#define CAM_SIOD   26
+#define CAM_SIOC   27
+#define CAM_D7     35
+#define CAM_D6     34
+#define CAM_D5     39
+#define CAM_D4     36
+#define CAM_D3     21
+#define CAM_D2     19
+#define CAM_D1     18
+#define CAM_D0      5
+#define CAM_VSYNC  25
+#define CAM_HREF   23
+#define CAM_PCLK   22
 
 // ─── WiFi AP identity ───────────────────────────────────────────────────
 #define AP_PREFIX  "PetBot_"
@@ -207,7 +232,7 @@ static bool init_camera() {
     cfg.pixel_format = PIXFORMAT_JPEG;
     cfg.frame_size   = FRAMESIZE_QVGA;   // 320x240 — bump after the link is stable
     cfg.jpeg_quality = 10;               // 0=best, 63=worst
-    cfg.fb_count     = 2;
+    cfg.fb_count     = 2;                // needs PSRAM Enabled in Tools menu
     if (esp_camera_init(&cfg) != ESP_OK) {
         Serial.println("[cam] init FAILED");
         return false;

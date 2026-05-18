@@ -1,9 +1,9 @@
 # PetBot — Arduino IDE quick start
 
 Single-file sketch, paste-and-flash. Mirrors Phase 1.1 of the
-PlatformIO build at the repo root (AP + camera + web app + `/cmd`
-echo), with **no servo / BLE / gait logic** — those land in Step 1.2
-and live in the PlatformIO build.
+PlatformIO build (AP + camera + web app + `/cmd` echo) with **no
+servo / BLE / gait logic** — those land in Step 1.2 and live in the
+PlatformIO build.
 
 Use this if you don't want to install PlatformIO yet and just want
 to see the bot boot, broadcast a WiFi AP, and serve the live camera.
@@ -17,7 +17,12 @@ arduino_quickstart/
     petbot.ino         ← open this in Arduino IDE
 ```
 
-## Setup
+The sketch defaults to the **Freenove ESP32-WROVER CAM Board**
+(classic ESP32, OV2640, micro-USB). A commented-out pin block at the
+top of the `.ino` switches it to the **Freenove ESP32-S3 WROOM CAM**
+if that's what you have — see "Which board do I have?" below.
+
+## Setup (classic Freenove ESP32-WROVER CAM)
 
 1. **Install ESP32 board support** in Arduino IDE 2.x:
    - File → Preferences → Additional boards manager URLs, add:
@@ -29,23 +34,22 @@ arduino_quickstart/
 
    | Setting | Value |
    |---|---|
-   | Board | **ESP32S3 Dev Module** (not "AI Thinker ESP32-CAM") |
-   | USB CDC On Boot | Enabled |
-   | CPU Frequency | 240MHz (WiFi) |
-   | Flash Mode | QIO 80MHz |
-   | Flash Size | 8MB (64Mb) — or 4MB if your variant is smaller |
+   | Board | **AI Thinker ESP32-CAM** |
+   | Flash Mode | QIO |
+   | Flash Frequency | 80MHz |
    | Partition Scheme | **Huge APP (3MB No OTA/1MB SPIFFS)** |
-   | PSRAM | **OPI PSRAM** |
+   | PSRAM | **Enabled** *(not "OPI PSRAM" — that's S3 only)* |
    | Upload Speed | 921600 |
 
 3. **Open** `arduino_quickstart/petbot/petbot.ino` (File → Open).
 
-4. **Plug in** the Freenove ESP32-S3 WROOM CAM with a USB-C **data**
-   cable (not charge-only). Tools → Port → pick the new
-   `cu.usbmodem*` (mac) / `ttyACM*` (linux) / `COMx` (win).
+4. **Plug in** the Freenove ESP32-WROVER CAM via micro-USB
+   (data cable, not charge-only). Tools → Port → pick the new
+   `cu.usbserial-*` (mac) / `ttyUSB*` (linux) / `COMx` (win).
 
-5. **Upload**. If it fails with "Failed to connect": hold BOOT,
-   tap RESET, release BOOT, click Upload again.
+5. **Upload**. If it fails with "Failed to connect": hold **BOOT**
+   (or short IO0 → GND), tap **RST**, release BOOT, click Upload
+   again. After flashing, press **RST** once to start the sketch.
 
 6. **Open Serial Monitor** at **115200 baud**. You should see:
 
@@ -65,6 +69,20 @@ You'll see a live MJPEG feed, a status line that ticks every 2 s,
 a hold-to-move D-pad, and face preset buttons. The D-pad just prints
 `[cmd] MOVE:fwd` etc. to serial — the servo wiring is Step 1.2.
 
+## Which board do I have?
+
+Look at the metal can on the module:
+
+| Module silk | Board name | USB port | Pin block to use |
+|---|---|---|---|
+| `ESP32-WROVER-B` / `-IE` | Freenove ESP32-WROVER CAM | micro-USB | **default in the .ino** |
+| `ESP32-S3-WROOM-1` | Freenove ESP32-S3 WROOM CAM | USB-C | swap to the commented S3 block at the top of the .ino |
+
+The S3 pin block + the S3 Tools settings are documented in the
+header comment of `petbot.ino`. If you flash with the wrong combo
+the board will bootloop (camera init hangs forever, watchdog resets
+every ~5 seconds).
+
 ## When to switch to the PlatformIO build
 
 The single-file sketch tops out at this Phase 1.1 scope. Anything
@@ -76,8 +94,6 @@ that needs:
 - The framed UART protocol to the future C6 head display
 - Recognition offload, PS5 controller, autonomous explore
 
-…lives in the modular PlatformIO build at the repo root (env
-`petbot_s3_ap` mirrors this sketch's behaviour, plus the rest of the
-plan grafts on cleanly). Switch when you're ready; the modules are
-laid out so adding features doesn't require touching files you've
-already gotten working.
+…lives in the modular PlatformIO build at the repo root. Switch
+when you're ready; the modules are laid out so adding features
+doesn't require touching files you've already gotten working.
