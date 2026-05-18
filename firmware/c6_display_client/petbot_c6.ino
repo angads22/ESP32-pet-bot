@@ -437,7 +437,7 @@ void input_poll() {
 // Target: ESP32-C6-LCD-1.47 (thin display client)
 // UART implementation. Avoid the reserved display GPIOs (6, 7, 14, 15,
 // 21, 22) and the BOOT button (typically GPIO9); the transport selector
-// below owns the pin selection.
+// later in this sketch owns the pin selection.
 
 #include "transport_uart.h"
 
