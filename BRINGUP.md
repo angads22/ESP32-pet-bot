@@ -18,9 +18,9 @@ from step 1.
 | USB-UART for serial monitor on each board | Optional but recommended for both |
 | Logic analyzer or scope | Optional, useful at step 1 |
 
-UART pins (defaults — change in `transport.cpp` if your carrier conflicts):
+UART pins (defaults — change in `petbot_s3.ino` / `petbot_c6.ino` if your carrier conflicts):
 
-| S3-CAM (`firmware/s3_cam_brain/src/transport/transport.cpp`) | C6 (`firmware/c6_display_client/src/transport/transport.cpp`) |
+| S3-CAM (`firmware/s3_cam_brain/petbot_s3.ino`) | C6 (`firmware/c6_display_client/petbot_c6.ino`) |
 |----|----|
 | `Serial1`, RX = GPIO18, TX = GPIO17 | `Serial1`, RX = GPIO16, TX = GPIO17 |
 
@@ -109,7 +109,7 @@ The C6's reserved display pins (do not reuse, ever): **6, 7, 14, 15, 21, 22**.
 **If it fails:**
 
 - No movement → the BOOT button GPIO might differ on your C6 carrier.
-  Edit `firmware/c6_display_client/src/input.cpp` (`kButtons[]`) and
+  Edit `firmware/c6_display_client/petbot_c6.ino` (`kButtons[]`) and
   change the pin to match your board.
 - Multiple advances per press → debounce window too short; raise
   `PB_INPUT_DEBOUNCE_MS` in `input.h`.
@@ -134,7 +134,7 @@ The C6's reserved display pins (do not reuse, ever): **6, 7, 14, 15, 21, 22**.
 **If it fails:**
 
 - Long-press never fires → raise / lower `PB_INPUT_LONGPRESS_MS` in
-  `firmware/c6_display_client/src/input.h`.
+  `firmware/c6_display_client/petbot_c6.ino`.
 - `[face]` line missing → check that `app_state::setExpression()` actually
   called `face_render::onExpressionChanged()` (build error / link order).
 
