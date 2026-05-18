@@ -188,7 +188,7 @@ void update() {
 // Motor stubs. To wire real motors:
 //   1. Set MOTORS_ENABLED to 1.
 //   2. Pick TB6612FNG-compatible GPIOs (avoid camera bus, face-TFT bus,
-//      and the S3 UART pins used for the C6 link later in this sketch).
+//      and the S3 UART pins reserved for the C6 link).
 //   3. Fill the TODO bodies.
 
 #include "motor_driver.h"
@@ -526,7 +526,7 @@ void onButtonEvent(uint8_t btn_id, uint8_t edge) {
 
 // Target: ESP32-S3-CAM (brain)
 // UART implementation. Uses HardwareSerial1 by convention; pins and baud
-// come from the constructor so the transport selector later in this sketch owns the policy choice.
+// come from the constructor while transport selection is handled by transport().
 
 #include "transport_uart.h"
 
@@ -597,7 +597,7 @@ bool TransportUsbCdc::begin() {
 
 // Target: ESP32-S3-CAM (brain)
 // Build-flag-selected transport singleton. Choose UART or USB-CDC at
-// compile time; setup()/loop() call transport().begin() / read() / write().
+// compile time; callers use transport().begin() / read() / write().
 
 #include "transport.h"
 
