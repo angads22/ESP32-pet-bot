@@ -1,592 +1,596 @@
-// Auto-consolidated firmware for ESP32-C6-LCD-1.47 (display client)
-// Generated from former src/*.cpp modules.
+/*
+ *  PetBot / Marvin — C6 head-display sketch
+ *  ─────────────────────────────────────────
+ *  Board     : Waveshare ESP32-C6-LCD-1.47 (onboard ST7789 172×320)
+ *  Role      : Animated kaomoji-style face for Marvin. Listens on Serial
+ *              for FACE:NAME commands and renders the matching emotion.
+ *
+ *  ── Faces (drawn as graphic primitives — vibe of the kaomoji) ─────────
+ *    FACE:IDLE       (·_·)            neutral; glances around + blink
+ *    FACE:HAPPY      (^ω^)            caret eyes, omega mouth, blush
+ *    FACE:SAD        (︶︹︶)         arc-down eyes, frown mouth
+ *    FACE:CRY        (T_T)            T-shaped eyes, tears falling
+ *    FACE:ANGRY      (ಠ益ಠ)         glare eyes + brow, gritted teeth
+ *    FACE:LOVE       (♡μ_μ)          heart eyes, sparkles
+ *    FACE:SLEEP      (=_=) zZz       closed eyes, sleeping Zs
+ *    FACE:SEARCH     (•_•)            wide eyes with pupils panning
+ *    FACE:CURIOUS    (?_?)            ringed eyes with floating "?"
+ *    FACE:WALK                        bouncing eyes, slight grin
+ *    FACE:TABLE_FLIP (ノಠ益ಠ)ノ彡┻━┻  arms up, motion lines, flying table
+ *    FACE:BLINK                       one-shot blink, returns to current
+ *    PING                             replies "pong" — link healthcheck
+ *
+ *  Auto-animations while a face is held:
+ *    - IDLE / HAPPY / SAD / CURIOUS: pupils glance around every 3.5–7 s
+ *      + a random 130 ms blink every 2.5–4.5 s.
+ *    - SEARCH: pupils pan ±18 px every ~110 ms.
+ *    - WALK:   vertical bounce ±4 px at 5 Hz.
+ *    - SLEEP:  static (no animation; gentle by design).
+ *    - TABLE_FLIP: static (the whole face is the punchline).
+ *
+ *  ── How to test now (no bot wiring required) ──────────────────────────
+ *    Flash via the C6's USB-C, open Serial Monitor at 115200,
+ *    type     FACE:HAPPY        + Enter, screen changes.
+ *    Type     FACE:TABLE_FLIP   for the chaos one.
+ *
+ *  ── How to wire bot → C6 later (proper link) ──────────────────────────
+ *    Body GPIO 4  (TX)   →   C6 GPIO 16 (Serial1 RX)
+ *    Body GND            →   C6 GND
+ *    Uncomment the Serial1.begin(...) + pump_serial(Serial1) calls below.
+ *
+ *  ── Arduino IDE setup ─────────────────────────────────────────────────
+ *    Tools → Board → ESP32 Arduino → "ESP32C6 Dev Module"
+ *    Tools → USB CDC On Boot      → Enabled
+ *    Tools → Partition Scheme     → Default 4MB
+ *    Tools → Upload Speed         → 921600
+ *
+ *  ── Libraries (install via Tools → Manage Libraries) ──────────────────
+ *    - Adafruit GFX Library                  by Adafruit
+ *    - Adafruit ST7735 and ST7789 Library    by Adafruit
+ */
 
-// Target: ESP32-C6-LCD-1.47 (thin display client)
-// ST7789 driver wiring. Uses Arduino-ESP32's SPI with explicit pin mapping
-// because the Waveshare board's MOSI/SCLK aren't the C6's default SPI
-// pins.
-
-#include "lcd.h"
-
+#include <Arduino.h>
 #include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7789.h>
 
-static Adafruit_ST7789 g_lcd(&SPI, PB_LCD_PIN_CS, PB_LCD_PIN_DC, PB_LCD_PIN_RST);
-static bool            g_inited = false;
+// ─── ST7789 wiring on the C6-LCD-1.47 (board-fixed, do not change) ──────
+#define TFT_MOSI   6
+#define TFT_SCLK   7
+#define TFT_CS    14
+#define TFT_DC    15
+#define TFT_RST   21
+#define TFT_BL    22
 
-void lcd_init() {
-    if (g_inited) return;
+#define SCR_W    320
+#define SCR_H    172
 
-    pinMode(PB_LCD_PIN_BL, OUTPUT);
-    digitalWrite(PB_LCD_PIN_BL, HIGH);
+static Adafruit_ST7789 tft = Adafruit_ST7789(&SPI, TFT_CS, TFT_DC, TFT_RST);
 
-    SPI.begin(PB_LCD_PIN_SCLK, /*MISO unused*/ -1, PB_LCD_PIN_MOSI, PB_LCD_PIN_CS);
-
-    g_lcd.init(PB_LCD_H, PB_LCD_W);   // (height, width) at native rotation 0
-    g_lcd.setRotation(1);             // landscape 320x172
-    g_lcd.fillScreen(0x0000);
-    g_lcd.setTextWrap(false);
-    g_inited = true;
-}
-
-Adafruit_ST7789& lcd() { return g_lcd; }
-
-void lcd_set_backlight(uint8_t level) {
-    digitalWrite(PB_LCD_PIN_BL, level > 0 ? HIGH : LOW);
-}
-
-// Target: ESP32-C6-LCD-1.47 (thin display client)
-// Streaming PNG receiver. The S3 emits PB_BLOB_PNG_BEGIN, then a series of
-// PB_BLOB_PNG_CHUNK frames, then PB_BLOB_PNG_END. We accumulate chunks
-// into a fixed SRAM buffer and decode on END.
-//
-// Behaviour today: SRAM only, hard cap = PB_PNG_SRAM_CAP. If the declared
-// total exceeds the cap, the blob is dropped with a serial warning.
-//
-// TODO: SD-card fallback. The Waveshare ESP32-C6-LCD-1.47 has an SD slot
-// — when total_len > PB_PNG_SRAM_CAP, open a temp file and stream the
-// chunks to disk, then PNGdec.openFile() in png_blob_end(). Until that's
-// wired up we deliberately fail loud (Serial warning) rather than fail
-// silent.
-
-#include "png_blob.h"
-
-#include <Arduino.h>
-#include <PNGdec.h>
-
-#include "lcd.h"
-
-#define PB_PNG_SRAM_CAP   (40 * 1024)
-
-static uint8_t  s_buf[PB_PNG_SRAM_CAP];
-static uint32_t s_total       = 0;
-static uint32_t s_received    = 0;
-static uint32_t s_expect_crc  = 0;
-static uint16_t s_next_chunk  = 0;
-static int16_t  s_blit_x      = 0;
-static int16_t  s_blit_y      = 0;
-static bool     s_active      = false;
-static bool     s_overflowed  = false;
-
-void png_blob_init() {
-    s_total = s_received = 0;
-    s_expect_crc = 0;
-    s_next_chunk = 0;
-    s_active = false;
-    s_overflowed = false;
-}
-
-void png_blob_begin(uint32_t total_len, uint32_t crc32,
-                    int16_t x, int16_t y, uint16_t /*w*/, uint16_t /*h*/) {
-    s_total       = total_len;
-    s_received    = 0;
-    s_expect_crc  = crc32;
-    s_next_chunk  = 0;
-    s_blit_x      = x;
-    s_blit_y      = y;
-    s_active      = true;
-    s_overflowed  = (total_len > PB_PNG_SRAM_CAP);
-    if (s_overflowed) {
-        Serial.printf("[png_blob] %lu B > SRAM cap %u B (TODO: SD fallback) - dropping\n",
-                      (unsigned long)total_len, (unsigned)PB_PNG_SRAM_CAP);
-    }
-}
-
-void png_blob_chunk(uint16_t chunk_idx, const uint8_t* data, uint16_t len) {
-    if (!s_active || s_overflowed) return;
-    if (chunk_idx != s_next_chunk) {
-        Serial.printf("[png_blob] out-of-order chunk %u (expected %u) - dropping blob\n",
-                      chunk_idx, s_next_chunk);
-        s_active = false;
-        return;
-    }
-    if (s_received + len > PB_PNG_SRAM_CAP || s_received + len > s_total) {
-        Serial.println("[png_blob] chunk overflow - dropping blob");
-        s_active = false;
-        return;
-    }
-    memcpy(s_buf + s_received, data, len);
-    s_received += len;
-    s_next_chunk++;
-}
-
-// CRC32 (IEEE 802.3, poly 0xEDB88320), used to validate the assembled blob
-// before handing it to PNGdec.
-static uint32_t crc32_calc(const uint8_t* data, size_t n) {
-    uint32_t c = 0xFFFFFFFFu;
-    for (size_t i = 0; i < n; ++i) {
-        c ^= data[i];
-        for (int k = 0; k < 8; ++k)
-            c = (c >> 1) ^ (0xEDB88320u & -(int32_t)(c & 1));
-    }
-    return c ^ 0xFFFFFFFFu;
-}
-
-static int png_draw_callback(PNGDRAW* d) {
-    // PNGdec gives us one scanline as RGB565 (after configuring the decoder
-    // with PNG_PIXEL_RGB565). Push it as a window into the LCD at our blit
-    // origin.
-    static uint16_t line[PB_LCD_W];
-    int n = d->iWidth > PB_LCD_W ? PB_LCD_W : d->iWidth;
-    // PNG library writes RGB565 directly into pPixels when configured.
-    auto& g = lcd();
-    g.startWrite();
-    g.setAddrWindow(s_blit_x, s_blit_y + d->y, n, 1);
-    memcpy(line, d->pPixels, n * 2);
-    g.writePixels(line, n);
-    g.endWrite();
-    return 1;
-}
-
-void png_blob_end() {
-    if (!s_active) return;
-    if (s_overflowed) { s_active = false; return; }
-
-    if (s_received != s_total) {
-        Serial.printf("[png_blob] received %lu / expected %lu - dropping\n",
-                      (unsigned long)s_received, (unsigned long)s_total);
-        s_active = false;
-        return;
-    }
-    uint32_t got_crc = crc32_calc(s_buf, s_received);
-    if (got_crc != s_expect_crc) {
-        Serial.printf("[png_blob] CRC32 mismatch %08lx != %08lx - dropping\n",
-                      (unsigned long)got_crc, (unsigned long)s_expect_crc);
-        s_active = false;
-        return;
-    }
-
-    PNG png;
-    int rc = png.openRAM(s_buf, s_received, png_draw_callback);
-    if (rc != PNG_SUCCESS) {
-        Serial.printf("[png_blob] openRAM failed: %d\n", rc);
-        s_active = false;
-        return;
-    }
-    png.decode(nullptr, 0);
-    png.close();
-    s_active = false;
-}
-
-// Target: ESP32-C6-LCD-1.47 (thin display client)
-// Translates wire-protocol frames into Adafruit_GFX primitive calls.
-
-#include "renderer.h"
-
-#include "lcd.h"
-#include "png_blob.h"
-#include "protocol/packets.h"
-
-#include <Arduino.h>
-
-static uint16_t rd_u16_be(const uint8_t* p) { return (uint16_t)((p[0] << 8) | p[1]); }
-static int16_t  rd_i16_be(const uint8_t* p) { return (int16_t)rd_u16_be(p); }
-static uint32_t rd_u32_be(const uint8_t* p) {
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
-           ((uint32_t)p[2] << 8)  |  (uint32_t)p[3];
-}
-
-static void handle_clear(const pb_frame_t& /*f*/) {
-    lcd().fillScreen(0x0000);
-}
-
-// PB_DRAW_TEXT  payload: [x:i16][y:i16][color:u16][size:u8][text...]
-static void handle_draw_text(const pb_frame_t& f) {
-    if (f.len < 7) return;
-    const uint8_t* p = f.payload;
-    int16_t  x     = rd_i16_be(p + 0);
-    int16_t  y     = rd_i16_be(p + 2);
-    uint16_t color = rd_u16_be(p + 4);
-    uint8_t  size  = p[6];
-    auto& g = lcd();
-    g.setCursor(x, y);
-    g.setTextColor(color);
-    g.setTextSize(size ? size : 1);
-    for (uint16_t i = 7; i < f.len; ++i) g.write((char)p[i]);
-}
-
-// PB_DRAW_RECT  payload: [x:i16][y:i16][w:u16][h:u16][color:u16][filled:u8]
-static void handle_draw_rect(const pb_frame_t& f) {
-    if (f.len < 11) return;
-    const uint8_t* p = f.payload;
-    int16_t  x      = rd_i16_be(p + 0);
-    int16_t  y      = rd_i16_be(p + 2);
-    uint16_t w      = rd_u16_be(p + 4);
-    uint16_t h      = rd_u16_be(p + 6);
-    uint16_t color  = rd_u16_be(p + 8);
-    bool     filled = p[10] != 0;
-    if (filled) lcd().fillRect(x, y, w, h, color);
-    else        lcd().drawRect(x, y, w, h, color);
-}
-
-// PB_DRAW_ICON  payload: [x:i16][y:i16][icon_id:u8]
-// Today: render a small placeholder rect coloured by icon_id so the
-// protocol is wired end-to-end. Real icon bitmaps land later when the
-// asset pipeline does.
-static void handle_draw_icon(const pb_frame_t& f) {
-    if (f.len < 5) return;
-    const uint8_t* p = f.payload;
-    int16_t x = rd_i16_be(p + 0);
-    int16_t y = rd_i16_be(p + 2);
-    uint8_t id = p[4];
-    static const uint16_t kPalette[8] = {
-        0xFFFF, 0xF800, 0x07E0, 0x001F, 0xFFE0, 0xF81F, 0x07FF, 0xFC00,
-    };
-    lcd().fillRect(x, y, 16, 16, kPalette[id & 7]);
-}
-
-// PB_SET_MENU  payload:
-//   [selected_idx:u8][title_len:u8][title...][n:u8] {item_len:u8 item...}*n
-//
-// Renders a simple title bar + vertical list. The selected item is
-// inverse-coloured. Skip the LVGL path for now — Adafruit primitives are
-// enough to ship and let the brain side stop pretending the menu is
-// stateless.
-static void handle_set_menu(const pb_frame_t& f) {
-    if (f.len < 3) return;
-    const uint8_t* p = f.payload;
-    uint8_t selected  = p[0];
-    uint8_t title_len = p[1];
-    if ((uint16_t)2 + title_len + 1 > f.len) return;
-    const uint8_t* title = p + 2;
-
-    uint16_t off = 2 + title_len;
-    uint8_t  n   = p[off++];
-
-    auto& g = lcd();
-    g.fillScreen(0x0000);
-
-    // Title bar
-    g.fillRect(0, 0, PB_LCD_W, 24, 0x4208);   // dark grey
-    g.setTextColor(0xFFFF);
-    g.setTextSize(2);
-    g.setCursor(8, 4);
-    for (uint8_t i = 0; i < title_len; ++i) g.write((char)title[i]);
-
-    // Items
-    g.setTextSize(2);
-    int16_t y = 30;
-    for (uint8_t i = 0; i < n; ++i) {
-        if (off >= f.len) break;
-        uint8_t item_len = p[off++];
-        if (off + item_len > f.len) break;
-
-        uint16_t bg = (i == selected) ? 0xF800 : 0x0000;
-        uint16_t fg = (i == selected) ? 0xFFFF : 0xFFFF;
-        g.fillRect(0, y - 2, PB_LCD_W, 22, bg);
-        g.setTextColor(fg);
-        g.setCursor(12, y + 2);
-        for (uint8_t k = 0; k < item_len; ++k) g.write((char)p[off + k]);
-        off += item_len;
-        y += 24;
-        if (y > PB_LCD_H - 20) break;
-    }
-}
-
-// PB_BACKLIGHT  payload: [level:u8]
-static void handle_backlight(const pb_frame_t& f) {
-    if (f.len < 1) return;
-    lcd_set_backlight(f.payload[0]);
-}
-
-// PB_BLOB_PNG_BEGIN  payload: [total_len:u32][crc32:u32][x:i16][y:i16][w:u16][h:u16]
-static void handle_png_begin(const pb_frame_t& f) {
-    if (f.len < 16) return;
-    const uint8_t* p = f.payload;
-    uint32_t total = rd_u32_be(p + 0);
-    uint32_t crc32 = rd_u32_be(p + 4);
-    int16_t  x     = rd_i16_be(p + 8);
-    int16_t  y     = rd_i16_be(p + 10);
-    uint16_t w     = rd_u16_be(p + 12);
-    uint16_t h     = rd_u16_be(p + 14);
-    png_blob_begin(total, crc32, x, y, w, h);
-}
-
-// PB_BLOB_PNG_CHUNK  payload: [chunk_idx:u16][data...]
-static void handle_png_chunk(const pb_frame_t& f) {
-    if (f.len < 2) return;
-    const uint8_t* p = f.payload;
-    uint16_t idx = rd_u16_be(p + 0);
-    png_blob_chunk(idx, p + 2, f.len - 2);
-}
-
-static void handle_png_end(const pb_frame_t& /*f*/) {
-    png_blob_end();
-}
-
-bool renderer_dispatch(const pb_frame_t& f) {
-    switch (f.type) {
-        case PB_CLEAR:           handle_clear(f);     return true;
-        case PB_DRAW_TEXT:       handle_draw_text(f); return true;
-        case PB_DRAW_RECT:       handle_draw_rect(f); return true;
-        case PB_DRAW_ICON:       handle_draw_icon(f); return true;
-        case PB_SET_MENU:        handle_set_menu(f);  return true;
-        case PB_BACKLIGHT:       handle_backlight(f); return true;
-        case PB_BLOB_PNG_BEGIN:  handle_png_begin(f); return true;
-        case PB_BLOB_PNG_CHUNK:  handle_png_chunk(f); return true;
-        case PB_BLOB_PNG_END:    handle_png_end(f);   return true;
-        default:                                      return false;
-    }
-}
-
-void renderer_init() {
-    png_blob_init();
-}
-
-void renderer_show_waiting() {
-    auto& g = lcd();
-    g.fillScreen(0x0000);
-    g.setTextColor(0xFFFF);
-    g.setTextSize(2);
-    g.setCursor(40, 70);
-    g.print("PetBot");
-    g.setTextSize(1);
-    g.setCursor(40, 100);
-    g.print("waiting for brain...");
-}
-
-// Target: ESP32-C6-LCD-1.47 (thin display client)
-// Polls a small fixed table of button GPIOs and turns edges into protocol
-// frames. Today only the BOOT button (GPIO9 on most C6 carriers) is
-// listed. Add rows to kButtons[] when more buttons are wired — the rest
-// is generic.
-
-#include "input.h"
-
-#include <Arduino.h>
-
-#include "protocol/frame.h"
-#include "protocol/packets.h"
-#include "transport/transport.h"
-
-struct ButtonCfg {
-    uint8_t btn_id;
-    int     pin;
-    bool    active_low;
+// ─── Face state ─────────────────────────────────────────────────────────
+enum FaceMode : uint8_t {
+    F_IDLE = 0, F_HAPPY, F_SAD, F_CRY, F_ANGRY, F_LOVE,
+    F_SLEEP, F_SEARCH, F_CURIOUS, F_WALK, F_TABLE_FLIP,
 };
 
-static const ButtonCfg kButtons[] = {
-    // BOOT button — wired active-low on the Waveshare carrier.
-    { PB_BTN_BOOT, 9, true },
-    // Add more rows as you wire menu nav buttons (UP/DOWN/SELECT/BACK).
-    // Avoid GPIOs 6, 7, 14, 15, 21, 22 (display) and 8 (RGB LED).
-};
+static FaceMode  s_face        = F_IDLE;
+static bool      s_blink_on    = false;
+static uint32_t  s_blink_until = 0;
+static uint32_t  s_next_blink  = 0;
 
-static constexpr size_t kNumButtons = sizeof(kButtons) / sizeof(kButtons[0]);
+// Idle-glance animation
+static int8_t    s_glance_x      = 0;
+static int8_t    s_glance_y      = 0;
+static uint32_t  s_next_glance   = 0;
+static uint32_t  s_glance_clear  = 0;
 
-struct ButtonState {
-    bool     pressed_stable;
-    bool     last_raw;
-    uint32_t last_change_ms;
-    uint32_t press_started_ms;
-    bool     longpress_fired;
-};
+// Search pan
+static int8_t    s_search_dir  = 1;
+static uint32_t  s_next_search = 0;
+static int8_t    s_search_off  = 0;
 
-static ButtonState s_state[kNumButtons];
-static uint32_t    s_last_poll_ms = 0;
-static uint8_t     s_seq          = 0;
+// Walk bounce
+static int8_t    s_walk_phase  = 0;
+static uint32_t  s_next_walk   = 0;
 
-static void emit_btn(uint8_t btn_id, uint8_t edge) {
-    uint8_t enc[PB_FRAME_OVERHEAD + 2];
-    uint8_t payload[2] = { btn_id, edge };
-    size_t n = pb_encode(enc, sizeof(enc), PB_BTN_EVENT, s_seq++, payload, 2);
-    if (n > 0) transport().write(enc, n);
-}
+static String    s_buf;
 
-void input_init() {
-    for (size_t i = 0; i < kNumButtons; ++i) {
-        pinMode(kButtons[i].pin, kButtons[i].active_low ? INPUT_PULLUP : INPUT_PULLDOWN);
-        s_state[i] = ButtonState{ false, false, 0, 0, false };
+// Useful colors (RGB565)
+#define C_WHITE   0xFFFF
+#define C_BLACK   0x0000
+#define C_RED     0xF800
+#define C_PINK    0xFA1F
+#define C_BLUE    0x041F
+#define C_TEAL    0x07FF
+#define C_YELLOW  0xFFE0
+#define C_BROWN   0xA200
+#define C_ORANGE  0xFD20
+#define C_GRAY    0x4208
+
+// Eye positions (centers)
+#define EYE_L_X   100
+#define EYE_R_X   (SCR_W - 100)
+#define EYE_Y      80
+
+// ─── Eye primitives ─────────────────────────────────────────────────────
+// (^ ^) caret peaks — two diagonal lines meeting at a top point.
+static void eye_caret(int cx, int cy, int w = 30, int h = 14, uint16_t c = C_WHITE) {
+    int x0 = cx - w / 2, x1 = cx + w / 2;
+    int yb = cy + h / 2, yt = cy - h / 2;
+    for (int t = 0; t < 3; t++) {
+        tft.drawLine(x0, yb + t, cx, yt + t, c);
+        tft.drawLine(cx, yt + t, x1, yb + t, c);
     }
 }
 
-void input_poll() {
-    uint32_t now = millis();
-    if (now - s_last_poll_ms < (1000 / PB_INPUT_POLL_HZ)) return;
-    s_last_poll_ms = now;
+// (︶ ︶) downward arc — open-side-up smile-like shape, but for eyes.
+static void eye_arc_down(int cx, int cy, int w = 32, int h = 10, uint16_t c = C_WHITE) {
+    for (int dx = -w / 2; dx <= w / 2; dx++) {
+        float t = (float)dx / (w / 2.0f);
+        int dy = (int)(h * (1.0f - t * t));
+        for (int s = 0; s < 2; s++) tft.drawPixel(cx + dx, cy + dy - s, c);
+    }
+}
 
-    for (size_t i = 0; i < kNumButtons; ++i) {
-        const auto& cfg = kButtons[i];
-        auto&       st  = s_state[i];
+// (T T) — thick T-shape for crying eyes.
+static void eye_t(int cx, int cy, uint16_t c = C_WHITE) {
+    tft.fillRect(cx - 15, cy - 12, 30, 4, c);
+    tft.fillRect(cx - 2,  cy - 12, 4,  24, c);
+}
 
-        bool raw  = digitalRead(cfg.pin) == LOW;
-        if (!cfg.active_low) raw = !raw;
+// (♡ ♡) — heart eye.
+static void eye_heart(int cx, int cy, uint16_t c = C_PINK) {
+    tft.fillCircle(cx - 8, cy - 4, 10, c);
+    tft.fillCircle(cx + 8, cy - 4, 10, c);
+    tft.fillTriangle(cx - 17, cy + 1, cx + 17, cy + 1, cx, cy + 18, c);
+}
 
-        if (raw != st.last_raw) {
-            st.last_raw = raw;
-            st.last_change_ms = now;
-            continue;  // wait for debounce window
+// (ಠ ಠ) — circular glare eye with thick angry brow.
+static void eye_glare(int cx, int cy, uint16_t c = C_WHITE) {
+    tft.fillCircle(cx, cy + 2, 14, c);
+    tft.fillCircle(cx, cy + 2, 5, C_BLACK);
+    // Thick angled brow on top, red
+    for (int t = 0; t < 5; t++) {
+        tft.drawLine(cx - 20, cy - 18 + t, cx + 16, cy - 24 + t, C_RED);
+    }
+}
+
+// (=_=) closed-eye line.
+static void eye_closed(int cx, int cy, int w = 30, uint16_t c = C_WHITE) {
+    tft.fillRect(cx - w / 2, cy - 2, w, 4, c);
+}
+
+// (•_•) plain wide eye, with pupil offset.
+static void eye_dot(int cx, int cy, int pupil_x = 0, int pupil_y = 0,
+                    uint16_t eye_c = C_WHITE, uint16_t pup_c = C_BLACK) {
+    tft.fillCircle(cx, cy, 16, eye_c);
+    tft.fillCircle(cx + pupil_x, cy + pupil_y, 6, pup_c);
+}
+
+// (?_?) — circle outline + floating "?".
+static void eye_question(int cx, int cy, uint16_t c = C_WHITE) {
+    tft.drawCircle(cx, cy, 14, c);
+    tft.drawCircle(cx, cy, 13, c);
+    tft.fillCircle(cx, cy, 4, c);
+    tft.setTextColor(c);
+    tft.setTextSize(2);
+    tft.setCursor(cx - 6, cy - 38);
+    tft.print("?");
+}
+
+// ─── Mouth primitives ───────────────────────────────────────────────────
+
+// ω-mouth: two small upward bumps (3-arc shape).
+static void mouth_omega(int cx, int cy, int w = 48, uint16_t c = C_WHITE) {
+    int hw = w / 2;
+    int b  = hw / 2;
+    for (int dx = -hw; dx <= hw; dx++) {
+        float v = 0;
+        // Two bumps
+        float t1 = (float)(dx + b / 2) / (b / 1.2f);
+        float t2 = (float)(dx - b / 2) / (b / 1.2f);
+        if (t1 > -1 && t1 < 1) v = max(v, (1.0f - t1 * t1) * 6.5f);
+        if (t2 > -1 && t2 < 1) v = max(v, (1.0f - t2 * t2) * 6.5f);
+        for (int s = 0; s < 2; s++) tft.drawPixel(cx + dx, cy - (int)v - s, c);
+    }
+    // Outer corner uplifts
+    tft.drawPixel(cx - hw,     cy - 1, c);
+    tft.drawPixel(cx + hw,     cy - 1, c);
+}
+
+// Smile arc (upturned mouth).
+static void mouth_smile(int cx, int cy, int w = 30, int h = 8, uint16_t c = C_WHITE) {
+    for (int dx = -w / 2; dx <= w / 2; dx++) {
+        float t = (float)dx / (w / 2.0f);
+        int dy = (int)(h * (1.0f - t * t));
+        for (int s = 0; s < 2; s++) tft.drawPixel(cx + dx, cy - dy + s, c);
+    }
+}
+
+// Frown arc (downturned mouth).
+static void mouth_frown(int cx, int cy, int w = 30, int h = 10, uint16_t c = C_WHITE) {
+    for (int dx = -w / 2; dx <= w / 2; dx++) {
+        float t = (float)dx / (w / 2.0f);
+        int dy = (int)(h * (1.0f - t * t));
+        for (int s = 0; s < 2; s++) tft.drawPixel(cx + dx, cy + dy - s, c);
+    }
+}
+
+// Underscore _.
+static void mouth_line(int cx, int cy, int w = 24, uint16_t c = C_WHITE) {
+    tft.fillRect(cx - w / 2, cy, w, 3, c);
+}
+
+// 益-style gritted teeth — grid of small rectangles.
+static void mouth_gritted(int cx, int cy, int w = 50, int h = 12, uint16_t c = C_WHITE) {
+    int x0 = cx - w / 2;
+    tft.drawLine(x0, cy,         x0 + w, cy,         c);
+    tft.drawLine(x0, cy + h,     x0 + w, cy + h,     c);
+    tft.drawLine(x0, cy + 1,     x0 + w, cy + 1,     c);
+    tft.drawLine(x0, cy + h - 1, x0 + w, cy + h - 1, c);
+    // Vertical separators
+    for (int i = 0; i <= 5; i++) {
+        int x = x0 + i * (w / 5);
+        tft.drawLine(x, cy, x, cy + h, c);
+    }
+}
+
+// Tiny o-shape mouth.
+static void mouth_o(int cx, int cy, int r = 6, uint16_t c = C_WHITE) {
+    tft.drawCircle(cx, cy, r, c);
+    tft.drawCircle(cx, cy, r - 1, c);
+}
+
+// ─── Decorations ────────────────────────────────────────────────────────
+
+static void draw_tears(int cx, int cy_eye) {
+    // teardrop hanging below the eye
+    tft.fillCircle(cx, cy_eye + 28, 5, C_BLUE);
+    tft.fillTriangle(cx - 5, cy_eye + 26, cx + 5, cy_eye + 26, cx, cy_eye + 12, C_BLUE);
+    // a second smaller drop trailing
+    tft.fillCircle(cx + 8, cy_eye + 42, 3, C_BLUE);
+}
+
+static void draw_blush(int cx, int cy, uint16_t c = C_PINK) {
+    tft.fillCircle(cx,     cy, 5, c);
+    tft.fillCircle(cx + 8, cy, 4, c);
+}
+
+static void draw_sparkles() {
+    // little dot-stars in the upper corners for the LOVE face
+    int xs[] = { 25, 50, 35, SCR_W - 25, SCR_W - 50, SCR_W - 35 };
+    int ys[] = { 20, 40, 60, 20, 40, 60 };
+    for (int i = 0; i < 6; i++) {
+        tft.fillCircle(xs[i], ys[i], 2, C_PINK);
+    }
+}
+
+static void draw_zzz() {
+    tft.setTextColor(C_WHITE);
+    tft.setTextSize(2);
+    tft.setCursor(SCR_W - 70, 30); tft.print("z");
+    tft.setTextSize(3);
+    tft.setCursor(SCR_W - 55, 20); tft.print("Z");
+    tft.setTextSize(2);
+    tft.setCursor(SCR_W - 30, 14); tft.print("z");
+}
+
+static void draw_arms_up() {
+    // ノ ノ — two diagonal arms thrown up from the lower edge
+    for (int t = 0; t < 3; t++) {
+        tft.drawLine(30 + t, 160, 55 + t, 100, C_WHITE);
+        tft.drawLine(SCR_W - 30 - t, 160, SCR_W - 55 - t, 100, C_WHITE);
+    }
+    // little hand "fists"
+    tft.fillCircle(55, 98, 4, C_WHITE);
+    tft.fillCircle(SCR_W - 55, 98, 4, C_WHITE);
+}
+
+static void draw_motion_lines() {
+    // 彡 — diagonal speed strokes between face and table
+    for (int i = 0; i < 4; i++) {
+        int y0 = 35 + i * 12;
+        tft.drawLine(SCR_W - 100, y0,     SCR_W - 80, y0 - 8, C_ORANGE);
+        tft.drawLine(SCR_W - 100, y0 + 1, SCR_W - 80, y0 - 7, C_ORANGE);
+    }
+}
+
+static void draw_flying_table() {
+    // ┻━┻ flung at an angle in the upper-right corner
+    int tx = SCR_W - 70, ty = 18;
+    tft.fillRect(tx, ty, 50, 5, C_BROWN);
+    tft.fillRect(tx + 10, ty + 5, 5, 16, C_BROWN);
+    tft.fillRect(tx + 35, ty + 5, 5, 16, C_BROWN);
+    // motion line off the right edge
+    tft.drawLine(tx + 50, ty + 2,  tx + 60, ty - 6,  C_BROWN);
+    tft.drawLine(tx + 50, ty + 3,  tx + 60, ty - 5,  C_BROWN);
+}
+
+// ─── Render ─────────────────────────────────────────────────────────────
+static void render() {
+    uint16_t bg = C_BLACK;
+    switch (s_face) {
+        case F_HAPPY:      bg = 0x0220; break;
+        case F_SAD:        bg = 0x0008; break;
+        case F_CRY:        bg = 0x0010; break;
+        case F_ANGRY:      bg = 0x2000; break;
+        case F_LOVE:       bg = 0x4924; break;   // dark plum
+        case F_SLEEP:      bg = C_BLACK; break;
+        case F_WALK:       bg = 0x0010; break;
+        case F_TABLE_FLIP: bg = 0x2000; break;   // angry-red tinted
+        default:           bg = C_BLACK;
+    }
+    tft.fillScreen(bg);
+
+    if (s_blink_on) {
+        eye_closed(EYE_L_X, EYE_Y);
+        eye_closed(EYE_R_X, EYE_Y);
+        return;
+    }
+
+    // Glance offsets (only the IDLE-ish faces with pupils respect these)
+    int gx = 0, gy = 0;
+    if (s_face == F_IDLE || s_face == F_SAD || s_face == F_CURIOUS) {
+        gx = s_glance_x;
+        gy = s_glance_y;
+    }
+
+    switch (s_face) {
+        case F_HAPPY:
+            // (^ω^)
+            eye_caret(EYE_L_X, EYE_Y);
+            eye_caret(EYE_R_X, EYE_Y);
+            mouth_omega(SCR_W / 2, 130);
+            draw_blush(50, 110);
+            draw_blush(SCR_W - 65, 110);
+            break;
+
+        case F_SAD:
+            // (︶︹︶)
+            eye_arc_down(EYE_L_X, EYE_Y - 5);
+            eye_arc_down(EYE_R_X, EYE_Y - 5);
+            mouth_frown(SCR_W / 2, 125, 38, 12);
+            break;
+
+        case F_CRY:
+            // (T_T)
+            eye_t(EYE_L_X, EYE_Y);
+            eye_t(EYE_R_X, EYE_Y);
+            mouth_line(SCR_W / 2, 135, 22);
+            draw_tears(EYE_L_X, EYE_Y);
+            draw_tears(EYE_R_X, EYE_Y);
+            break;
+
+        case F_ANGRY:
+            // (ಠ益ಠ)
+            eye_glare(EYE_L_X, EYE_Y);
+            eye_glare(EYE_R_X, EYE_Y);
+            mouth_gritted(SCR_W / 2, 125, 50, 12);
+            break;
+
+        case F_LOVE:
+            // (♡μ_μ)
+            eye_heart(EYE_L_X, EYE_Y - 4);
+            eye_heart(EYE_R_X, EYE_Y - 4);
+            mouth_smile(SCR_W / 2, 130, 22, 6, C_PINK);
+            draw_sparkles();
+            break;
+
+        case F_SLEEP:
+            // (=_=) zZz
+            eye_closed(EYE_L_X, EYE_Y, 30);
+            eye_closed(EYE_R_X, EYE_Y, 30);
+            mouth_line(SCR_W / 2, 130, 18, C_GRAY);
+            draw_zzz();
+            break;
+
+        case F_SEARCH:
+            // (•_•) panning pupils
+            eye_dot(EYE_L_X, EYE_Y, s_search_off, 0);
+            eye_dot(EYE_R_X, EYE_Y, s_search_off, 0);
+            mouth_o(SCR_W / 2, 130, 5);
+            break;
+
+        case F_CURIOUS:
+            // (?_?)
+            eye_question(EYE_L_X, EYE_Y);
+            eye_question(EYE_R_X, EYE_Y);
+            mouth_o(SCR_W / 2, 130, 4);
+            break;
+
+        case F_WALK: {
+            int bounce = s_walk_phase ? 4 : -4;
+            eye_dot(EYE_L_X, EYE_Y + bounce);
+            eye_dot(EYE_R_X, EYE_Y + bounce);
+            mouth_smile(SCR_W / 2, 130 + bounce, 25, 6);
+            tft.fillRoundRect(SCR_W / 2 - 4, 132 + bounce, 8, 6, 3, C_RED);  // tiny tongue
+            break;
         }
-        if (now - st.last_change_ms < PB_INPUT_DEBOUNCE_MS) continue;
 
-        if (raw && !st.pressed_stable) {
-            st.pressed_stable = true;
-            st.press_started_ms = now;
-            st.longpress_fired = false;
-            emit_btn(cfg.btn_id, PB_BTN_PRESS);
-        } else if (!raw && st.pressed_stable) {
-            st.pressed_stable = false;
-            emit_btn(cfg.btn_id, PB_BTN_RELEASE);
-        } else if (raw && st.pressed_stable && !st.longpress_fired
-                   && (now - st.press_started_ms >= PB_INPUT_LONGPRESS_MS)) {
-            st.longpress_fired = true;
-            emit_btn(cfg.btn_id, PB_BTN_LONGPRESS);
-        }
+        case F_TABLE_FLIP:
+            // (ノಠ益ಠ)ノ彡┻━┻
+            eye_glare(EYE_L_X + 10, EYE_Y + 10);
+            eye_glare(EYE_R_X - 10, EYE_Y + 10);
+            mouth_gritted(SCR_W / 2, 130, 50, 12);
+            draw_arms_up();
+            draw_motion_lines();
+            draw_flying_table();
+            break;
+
+        case F_IDLE:
+        default:
+            // (·_·)
+            eye_dot(EYE_L_X, EYE_Y, gx, gy);
+            eye_dot(EYE_R_X, EYE_Y, gx, gy);
+            mouth_line(SCR_W / 2, 130, 24);
+            break;
     }
 }
 
-// Target: ESP32-C6-LCD-1.47 (thin display client)
-// UART implementation. Avoid the reserved display GPIOs (6, 7, 14, 15,
-// 21, 22) and the BOOT button (typically GPIO9); pin selection is provided
-// by the constructor in the transport singleton.
+static const char* face_name(FaceMode f) {
+    switch (f) {
+        case F_IDLE:       return "IDLE";
+        case F_HAPPY:      return "HAPPY";
+        case F_SAD:        return "SAD";
+        case F_CRY:        return "CRY";
+        case F_ANGRY:      return "ANGRY";
+        case F_LOVE:       return "LOVE";
+        case F_SLEEP:      return "SLEEP";
+        case F_SEARCH:     return "SEARCH";
+        case F_CURIOUS:    return "CURIOUS";
+        case F_WALK:       return "WALK";
+        case F_TABLE_FLIP: return "TABLE_FLIP";
+        default:           return "?";
+    }
+}
 
-#include "transport_uart.h"
-
-TransportUart::TransportUart(HardwareSerial& port, int rx_pin, int tx_pin,
-                             uint32_t baud)
-    : port_(port), rx_pin_(rx_pin), tx_pin_(tx_pin), baud_(baud) {}
-
-bool TransportUart::begin() {
-    port_.begin(baud_, SERIAL_8N1, rx_pin_, tx_pin_);
-    started_ = true;
+static bool parse_face(const String& s, FaceMode& out) {
+    if      (s == "IDLE")       out = F_IDLE;
+    else if (s == "HAPPY")      out = F_HAPPY;
+    else if (s == "SAD")        out = F_SAD;
+    else if (s == "CRY")        out = F_CRY;
+    else if (s == "ANGRY")      out = F_ANGRY;
+    else if (s == "LOVE")       out = F_LOVE;
+    else if (s == "SLEEP")      out = F_SLEEP;
+    else if (s == "SEARCH")     out = F_SEARCH;
+    else if (s == "CURIOUS")    out = F_CURIOUS;
+    else if (s == "WALK")       out = F_WALK;
+    else if (s == "TABLE_FLIP" || s == "FLIP") out = F_TABLE_FLIP;
+    else return false;
     return true;
 }
 
-size_t TransportUart::write(const uint8_t* data, size_t len) {
-    return started_ ? port_.write(data, len) : 0;
+static void handle_line(String& line) {
+    line.trim();
+    if (!line.length()) return;
+    if (line.equalsIgnoreCase("PING")) { Serial.println("pong"); return; }
+    line.toUpperCase();
+    if (line.startsWith("FACE:")) {
+        String f = line.substring(5);
+        if (f == "BLINK") {
+            s_blink_on    = true;
+            s_blink_until = millis() + 150;
+            render();
+            Serial.println("ok blink");
+            return;
+        }
+        FaceMode m;
+        if (!parse_face(f, m)) { Serial.print("? bad face: "); Serial.println(f); return; }
+        s_face = m;
+        s_blink_on = false;
+        s_glance_x = s_glance_y = 0;
+        s_next_blink   = millis() + 2500 + random(0, 2000);
+        s_next_glance  = millis() + 3500 + random(0, 2500);
+        s_next_search  = millis() + 110;
+        s_next_walk    = millis() + 200;
+        render();
+        Serial.print("ok face="); Serial.println(face_name(s_face));
+        return;
+    }
+    Serial.print("? unknown: "); Serial.println(line);
 }
 
-int TransportUart::read() {
-    if (!started_ || port_.available() == 0) return -1;
-    return port_.read();
-}
-
-size_t TransportUart::available() {
-    return started_ ? port_.available() : 0;
-}
-
-// Target: ESP32-C6-LCD-1.47 (thin display client)
-//
-// TODO: USB CDC DEVICE transport — STUBBED until the UART path is fully working.
-//
-// The C6-LCD-1.47 ships with USB CDC On Boot enabled by default in the
-// Waveshare/Arduino-ESP32 toolchain, which means `Serial` already maps to
-// the native USB CDC port out of the box. Once we are ready to switch
-// transports, the C6 side becomes a one-liner: this class wraps the
-// global `Serial` object exactly the way TransportUart wraps Serial1.
-//
-// We are not enabling that yet because:
-//   - The S3-side host implementation is also stubbed (see the matching
-//     section in firmware/s3_cam_brain/petbot_s3.ino).
-//     Bringing up only one half achieves nothing.
-//   - The handshake (PB_HELLO from the C6, PB_SET_MENU response from the
-//     S3) needs the full BRINGUP.md checklist re-run end-to-end on USB
-//     before we can call this milestone done. That's Task 8 in the
-//     working task list, after Task 7 passes.
-//
-// When implementing:
-//   - In begin():    while (!Serial) yield();   // wait for host enumeration
-//                    return true;
-//   - In write():    return Serial.write(data, len);
-//   - In read():     return Serial.available() ? Serial.read() : -1;
-//   - In available():return Serial.available();
-//   - Make sure platformio.ini sets `build_flags = -D ARDUINO_USB_CDC_ON_BOOT=1`
-//     for this env (it is the default on the C6-LCD-1.47 but worth pinning
-//     explicitly so the build doesn't drift).
-
-#include "transport_usbcdc.h"
-
-bool TransportUsbCdc::begin() {
-    return false;
-}
-
-// Target: ESP32-C6-LCD-1.47 (thin display client)
-// Build-flag-selected transport singleton.
-
-#include "transport.h"
-
-#if defined(PB_TRANSPORT_USBCDC) && PB_TRANSPORT_USBCDC
-  #include "transport_usbcdc.h"
-  static TransportUsbCdc g_transport;
-#else
-  // UART defaults for the C6 ↔ S3-CAM link.
-  //
-  // GPIOs 6, 7, 14, 15, 21, 22 are wired on-board to the ST7789 — do NOT
-  // reuse. GPIO 9 is the BOOT button on most C6-LCD-1.47 boards. GPIO 8
-  // is often the WS2812 RGB LED. The defaults below pick from the
-  // remaining safe range; verify on your specific carrier.
-  #include "transport_uart.h"
-  static TransportUart g_transport(Serial1, /*rx*/16, /*tx*/17, 921600);
-#endif
-
-Transport& transport() { return g_transport; }
-
-// Target: ESP32-C6-LCD-1.47 (thin display client)
-// Entry point. Boots the LCD, opens the transport, sends PB_HELLO, then
-// loops: drain transport bytes into the protocol decoder; on each full
-// frame call renderer_dispatch(); poll buttons and emit PB_BTN_EVENT.
-
-#include <Arduino.h>
-
-#include "input.h"
-#include "lcd.h"
-#include "renderer.h"
-#include "protocol/frame.h"
-#include "protocol/packets.h"
-#include "transport/transport.h"
-
-#define PB_C6_FW_VERSION  0x0001
-#define PB_C6_CAPS        0x0001  // bit 0 = ST7789 ready
-
-static uint8_t      s_decoder_buf[PB_MAX_PAYLOAD];
-static pb_decoder_t s_decoder;
-static uint8_t      s_seq = 0;
-
-static void send_hello() {
-    uint8_t enc[PB_FRAME_OVERHEAD + 4];
-    uint8_t payload[4] = {
-        (uint8_t)(PB_C6_FW_VERSION >> 8), (uint8_t)(PB_C6_FW_VERSION & 0xFF),
-        (uint8_t)(PB_C6_CAPS        >> 8), (uint8_t)(PB_C6_CAPS        & 0xFF),
-    };
-    size_t n = pb_encode(enc, sizeof(enc), PB_HELLO, s_seq++, payload, 4);
-    if (n > 0) transport().write(enc, n);
+static void pump_serial(Stream& port) {
+    while (port.available()) {
+        char c = (char)port.read();
+        if (c == '\n' || c == '\r') {
+            if (s_buf.length()) {
+                handle_line(s_buf);
+                s_buf = "";
+            }
+        } else if (s_buf.length() < 64) {
+            s_buf += c;
+        }
+    }
 }
 
 void setup() {
     Serial.begin(115200);
-    Serial.println("\n=== PetBot C6 client booting ===");
+    delay(200);
+    Serial.println("\n=== Marvin C6 face booting ===");
 
-    lcd_init();
-    renderer_init();
-    renderer_show_waiting();
+    // For wired bot→C6 link later:
+    // Serial1.begin(115200, SERIAL_8N1, /*rx*/16, /*tx*/17);
 
-    if (!transport().begin()) {
-        Serial.println("[transport] begin() FAILED — check PB_TRANSPORT_* build flags");
-    }
+    // Backlight PWM (v3.x API).
+    ledcAttach(TFT_BL, 5000, 8);
+    ledcWrite(TFT_BL, 80);                  // ~30% — runs cooler than full-on
 
-    pb_decoder_init(&s_decoder, s_decoder_buf, sizeof(s_decoder_buf));
-    input_init();
+    SPI.begin(TFT_SCLK, /*MISO*/ -1, TFT_MOSI, TFT_CS);
+    tft.init(SCR_H, SCR_W);
+    tft.setRotation(1);
+    tft.fillScreen(C_BLACK);
+    tft.setTextColor(C_WHITE);
 
-    send_hello();
-    Serial.println("=== PetBot C6 client ready ===");
+    render();
+
+    uint32_t now = millis();
+    s_next_blink  = now + 3000;
+    s_next_glance = now + 4000;
+    s_next_search = now + 500;
+    s_next_walk   = now + 200;
+
+    Serial.println("ready — try: FACE:HAPPY  FACE:WALK  FACE:TABLE_FLIP  FACE:LOVE");
 }
 
 void loop() {
-    while (transport().available() > 0) {
-        int b = transport().read();
-        if (b < 0) break;
-        pb_frame_t frame{};
-        pb_status_t s = pb_feed(&s_decoder, (uint8_t)b, &frame);
-        if (s == PB_OK) {
-            if (!renderer_dispatch(frame)) {
-                Serial.printf("[c6] unknown packet type 0x%02X len=%u\n",
-                              frame.type, (unsigned)frame.len);
-            }
-        } else if (s == PB_ERR_CRC) {
-            Serial.println("[c6] frame dropped: CRC mismatch");
-        } else if (s == PB_ERR_LEN) {
-            Serial.println("[c6] frame dropped: length > buffer cap");
+    pump_serial(Serial);
+    // pump_serial(Serial1);    // uncomment after wiring body TX → C6 RX
+
+    uint32_t now = millis();
+
+    // End-of-blink
+    if (s_blink_on && now >= s_blink_until) {
+        s_blink_on = false;
+        s_next_blink = now + 2500 + random(0, 2000);
+        render();
+    }
+
+    bool glance_face =
+        (s_face == F_IDLE || s_face == F_HAPPY || s_face == F_CURIOUS || s_face == F_SAD);
+
+    // Blink scheduler
+    if (glance_face && !s_blink_on && now >= s_next_blink) {
+        s_blink_on = true;
+        s_blink_until = now + 130;
+        render();
+    }
+
+    // Idle glance
+    if (glance_face && !s_blink_on) {
+        if (s_glance_x == 0 && s_glance_y == 0 && now >= s_next_glance) {
+            static const int8_t DIRS[][2] = {
+                {-12,  0}, {12,  0}, {0, -6}, {-10, -5}, {10, -5}, {-9, 5}, {9, 5},
+            };
+            const int N = sizeof(DIRS) / sizeof(DIRS[0]);
+            int i = random(0, N);
+            s_glance_x = DIRS[i][0];
+            s_glance_y = DIRS[i][1];
+            s_glance_clear = now + 500 + random(0, 600);
+            s_next_glance  = now + 3500 + random(0, 3500);
+            render();
+        } else if ((s_glance_x || s_glance_y) && now >= s_glance_clear) {
+            s_glance_x = 0;
+            s_glance_y = 0;
+            render();
         }
     }
 
-    input_poll();
+    // Search pan
+    if (s_face == F_SEARCH && !s_blink_on && now >= s_next_search) {
+        s_search_off += s_search_dir * 6;
+        if (s_search_off >  18) s_search_dir = -1;
+        if (s_search_off < -18) s_search_dir = +1;
+        s_next_search = now + 110;
+        render();
+    }
+
+    // Walk bounce
+    if (s_face == F_WALK && !s_blink_on && now >= s_next_walk) {
+        s_walk_phase ^= 1;
+        s_next_walk = now + 200;
+        render();
+    }
+
+    delay(8);
 }
