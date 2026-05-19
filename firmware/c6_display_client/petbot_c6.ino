@@ -90,6 +90,7 @@ static uint32_t  s_next_search = 0;
 static int8_t    s_search_off  = 0;
 
 // Walk bounce
+static constexpr uint8_t WALK_PHASE_COUNT = 4;
 static uint8_t   s_walk_phase  = 0;
 static uint32_t  s_next_walk   = 0;
 
@@ -399,10 +400,11 @@ static void render() {
             break;
 
         case F_WALK: {
+            // 4-phase gait keyframes: contact → lift → swing → settle.
             static const int8_t kEyeY[4] = { -2, 2, 5, 1 };
             static const int8_t kMouthY[4] = { -1, 2, 4, 0 };
             static const int8_t kPupilX[4] = { 2, 1, -1, -2 };
-            const uint8_t phase = s_walk_phase & 0x03;
+            const uint8_t phase = s_walk_phase;
             eye_dot(EYE_L_X, EYE_Y + kEyeY[phase], kPupilX[phase], 0);
             eye_dot(EYE_R_X, EYE_Y + kEyeY[phase], kPupilX[phase], 0);
             mouth_smile(SCR_W / 2, 130 + kMouthY[phase], 25, 6);
@@ -590,7 +592,7 @@ void loop() {
 
     // Walk bounce
     if (s_face == F_WALK && !s_blink_on && now >= s_next_walk) {
-        s_walk_phase = (uint8_t)((s_walk_phase + 1) & 0x03);
+        s_walk_phase = (uint8_t)((s_walk_phase + 1) % WALK_PHASE_COUNT);
         s_next_walk = now + 120;
         render();
     }

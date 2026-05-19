@@ -283,10 +283,14 @@ static esp_err_t h_demo_wave(httpd_req_t* r) {
     return ESP_OK;
 }
 
-static inline uint16_t clamp_us_i32(int32_t us) {
+static inline uint16_t clamp_servo_pulse(int32_t us) {
     if (us < 400) return 400;
     if (us > 2600) return 2600;
     return (uint16_t)us;
+}
+
+static inline bool leg_in_tripod(uint8_t leg, const uint8_t tripod[2]) {
+    return leg == tripod[0] || leg == tripod[1];
 }
 
 // Simple alternating-tripod walk demo:
@@ -301,13 +305,9 @@ static esp_err_t h_walk(httpd_req_t* r) {
         calfHome[leg] = s_us[CALF_CH[leg]];
     }
 
-    auto is_in_tripod = [](uint8_t leg, const uint8_t tripod[2]) -> bool {
-        return leg == tripod[0] || leg == tripod[1];
-    };
-
-    auto step = [&](const uint8_t active[2], int16_t activeHip, int16_t supportHip) {
+    auto step = [&hipHome, &thighHome, &calfHome](const uint8_t active[2], int16_t activeHip, int16_t supportHip) {
         for (uint8_t leg = 0; leg < 4; leg++) {
-            const bool lift = is_in_tripod(leg, active);
+            const bool lift = leg_in_tripod(leg, active);
             const uint16_t hipBase = hipHome[leg];
             const uint16_t thighBase = thighHome[leg];
             const uint16_t calfBase = calfHome[leg];
@@ -316,10 +316,11 @@ static esp_err_t h_walk(httpd_req_t* r) {
             const int16_t thighDelta = lift ? -90 : 45;
             const int16_t calfDelta = lift ? 140 : -50;
 
-            servo_set_us(HIP_CH[leg], clamp_us_i32((int32_t)hipBase + hipDelta));
-            servo_set_us(THIGH_CH[leg], clamp_us_i32((int32_t)thighBase + thighDelta));
-            servo_set_us(CALF_CH[leg], clamp_us_i32((int32_t)calfBase + calfDelta));
+            servo_set_us(HIP_CH[leg], clamp_servo_pulse((int32_t)hipBase + hipDelta));
+            servo_set_us(THIGH_CH[leg], clamp_servo_pulse((int32_t)thighBase + thighDelta));
+            servo_set_us(CALF_CH[leg], clamp_servo_pulse((int32_t)calfBase + calfDelta));
         }
+        // 260 ms keeps a visible but stable bench-test cadence for this gait.
         delay(260);
     };
 
