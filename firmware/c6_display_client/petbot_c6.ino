@@ -90,7 +90,7 @@ static uint32_t  s_next_search = 0;
 static int8_t    s_search_off  = 0;
 
 // Walk bounce
-static int8_t    s_walk_phase  = 0;
+static uint8_t   s_walk_phase  = 0;
 static uint32_t  s_next_walk   = 0;
 
 static String    s_buf;
@@ -399,11 +399,14 @@ static void render() {
             break;
 
         case F_WALK: {
-            int bounce = s_walk_phase ? 4 : -4;
-            eye_dot(EYE_L_X, EYE_Y + bounce);
-            eye_dot(EYE_R_X, EYE_Y + bounce);
-            mouth_smile(SCR_W / 2, 130 + bounce, 25, 6);
-            tft.fillRoundRect(SCR_W / 2 - 4, 132 + bounce, 8, 6, 3, C_RED);  // tiny tongue
+            static const int8_t kEyeY[4] = { -2, 2, 5, 1 };
+            static const int8_t kMouthY[4] = { -1, 2, 4, 0 };
+            static const int8_t kPupilX[4] = { 2, 1, -1, -2 };
+            const uint8_t phase = s_walk_phase & 0x03;
+            eye_dot(EYE_L_X, EYE_Y + kEyeY[phase], kPupilX[phase], 0);
+            eye_dot(EYE_R_X, EYE_Y + kEyeY[phase], kPupilX[phase], 0);
+            mouth_smile(SCR_W / 2, 130 + kMouthY[phase], 25, 6);
+            tft.fillRoundRect(SCR_W / 2 - 4, 132 + kMouthY[phase], 8, 6, 3, C_RED);  // tiny tongue
             break;
         }
 
@@ -509,8 +512,8 @@ void setup() {
     delay(200);
     Serial.println("\n=== Marvin C6 face booting ===");
 
-    // For wired bot→C6 link later:
-    // Serial1.begin(115200, SERIAL_8N1, /*rx*/16, /*tx*/17);
+    // Wired main-board → C6 screen control.
+    Serial1.begin(921600, SERIAL_8N1, /*rx*/16, /*tx*/17);
 
     // Backlight PWM (v3.x API).
     ledcAttach(TFT_BL, 5000, 8);
@@ -528,14 +531,14 @@ void setup() {
     s_next_blink  = now + 3000;
     s_next_glance = now + 4000;
     s_next_search = now + 500;
-    s_next_walk   = now + 200;
+    s_next_walk   = now + 120;
 
     Serial.println("ready — try: FACE:HAPPY  FACE:WALK  FACE:TABLE_FLIP  FACE:LOVE");
 }
 
 void loop() {
     pump_serial(Serial);
-    // pump_serial(Serial1);    // uncomment after wiring body TX → C6 RX
+    pump_serial(Serial1);
 
     uint32_t now = millis();
 
@@ -587,8 +590,8 @@ void loop() {
 
     // Walk bounce
     if (s_face == F_WALK && !s_blink_on && now >= s_next_walk) {
-        s_walk_phase ^= 1;
-        s_next_walk = now + 200;
+        s_walk_phase = (uint8_t)((s_walk_phase + 1) & 0x03);
+        s_next_walk = now + 120;
         render();
     }
 
