@@ -1,138 +1,132 @@
-# PetBot — ESP32 Firmware
+# Marvin — ESP32 robot dog
 
-Two-board desktop robot: **ESP32-S3-CAM** (brain) + **ESP32-C6-LCD-1.47**
-(thin display client). The S3 owns BLE, WiFi, vision, motors, audio,
-and the big face TFT. The C6 mirrors menus / text / icons / PNGs the
-S3 sends it and reports button presses back. All phone control flows
-`phone → S3 → C6`; the C6 never sees BLE.
+Single-file Arduino sketches for a Freenove ESP32 robot-dog body, with a
+Waveshare ESP32-C6-LCD-1.47 as the face display.
 
-See `ROBOT_FIRMWARE_PLAN.md` for the architecture in detail and
-`BRINGUP.md` for the end-to-end smoke-test checklist.
-
----
-
-## Build modes
-
-The repo ships two PlatformIO firmwares from one root `platformio.ini`.
-
-| Env | Board | Source dir | Build flags | Partition | Purpose |
-|-----|-------|-----------|-------------|-----------|---------|
-| `petbot_s3` | `esp32-s3-devkitc-1` (or your S3-CAM variant) | `firmware/s3_cam_brain/src` | *(none)* | `huge_app.csv` | Brain — BLE + WiFi + vision + motors + audio + big face |
-| `petbot_s3_wifi` | same | same | `-DPETBOT_ENABLE_WIFI=1` | `huge_app.csv` | Brain with captive-portal web UI |
-| `petbot_s3_stream` | same | same | `-DPETBOT_ENABLE_WIFI=1 -DPETBOT_ENABLE_STREAM=1` | `huge_app.csv` | Brain with web UI + MJPEG stream |
-| `petbot_c6` | `esp32-c6-devkitc-1` (Waveshare ESP32-C6-LCD-1.47) | `firmware/c6_display_client/src` | *(none)* | default | Thin client — ST7789 + input only |
-
-Default transport is UART (`-DPB_TRANSPORT_UART=1`, on by default).
-USB-CDC (`-DPB_TRANSPORT_USBCDC=1`) is stubbed — see Task 8 in the
-working task list and the TODO block at the top of
-`transport_usbcdc.cpp`.
-
-Build commands:
-
-```bash
-pio run -e petbot_s3            # S3 brain, BLE-only
-pio run -e petbot_s3_wifi -t upload    # S3 brain, BLE + WiFi web UI
-pio run -e petbot_c6 -t upload  # C6 thin client
-pio device monitor              # serial logs
+```
+petbot/             ← body firmware (Freenove ESP32-WROVER CAM)
+  petbot.ino          WiFi AP + web UI + camera + 12-servo gait + touch
+petbot_c6/          ← head display firmware (Waveshare ESP32-C6-LCD-1.47)
+  petbot_c6.ino       Animated kaomoji face, listens on Serial for FACE:NAME
+petbot_calibrate/   ← standalone calibration tool
+  petbot_calibrate.ino   12 sliders + wiggle + wave demo, no other features
 ```
 
-Flash the C6 first, then the S3 — the S3 will start pushing frames as
-soon as it sees `PB_HELLO` from the C6 on boot.
+## Quick start
 
----
+### 1. Body — `petbot/petbot.ino`
 
-## Wiring (UART transport, default)
+Board: **Freenove ESP32-WROVER CAM** (classic ESP32 + OV2640/OV3660 camera).
 
-Three wires between the boards:
+**Wiring**
 
-| S3-CAM | C6-LCD-1.47 |
-|--------|-------------|
-| `GPIO17 (TX)` | UART RX (any free GPIO clear of the reserved display pins 6, 7, 14, 15, 21, 22) |
-| `GPIO18 (RX)` | UART TX (same caveat) |
-| `GND` | `GND` |
+| Body | → |
+|---|---|
+| PCA9685 SDA | ESP32 GPIO 13 |
+| PCA9685 SCL | ESP32 GPIO 14 |
+| PCA9685 VCC | 3.3 V |
+| PCA9685 V+  | 5–6 V *regulated* supply (not raw battery) |
+| Touch sensor (TTP223) OUT | GPIO 15 |
+| All GNDs tied together | — |
 
-UART runs at **921600 8N1**. Common ground is non-negotiable.
+Servos plug into PCA9685 channels:
+- **FL** hip=3,  thigh=1,  calf=2
+- **FR** hip=15, thigh=14, calf=13
+- **BL** hip=7,  thigh=6,  calf=5
+- **BR** hip=8,  thigh=9,  calf=10
 
-For USB-CDC transport (later milestone) the S3 hosts a USB CDC port and
-the C6's default `Serial` becomes the link — see `BRINGUP.md` and the
-TODO comment in `firmware/s3_cam_brain/src/transport/transport_usbcdc.cpp`.
+**Arduino IDE Tools settings**
 
----
+- Board: **AI Thinker ESP32-CAM**
+- Flash Mode: QIO
+- Partition Scheme: **Huge APP (3MB No OTA/1MB SPIFFS)**
+- PSRAM: **Enabled** (not "OPI PSRAM" — that's for ESP32-S3 boards)
+- Upload Speed: 921600
 
-## Phone control (BLE / WiFi)
+**Libraries** (install via Tools → Manage Libraries…)
 
-### BLE — desktop / Android Chrome or Edge
+- Adafruit PWM Servo Driver Library
 
-1. Flash `petbot_s3`. It advertises as **PetBot** over BLE NUS.
-2. Open `web/robot_webapp.html` in Chrome → **Connect via Bluetooth** → pick **PetBot**.
+**Flash and connect**
 
-> Web Bluetooth is **not** supported on iOS / iPadOS / Safari / Firefox. Use the WiFi build for Apple devices.
+1. Upload `petbot.ino`. If upload fails: hold BOOT, tap RST, release BOOT, click Upload again.
+2. Phone WiFi → join **`PetBot_xxxx`** (password `petbot123`)
+3. Browser → `http://192.168.4.1`
 
-### WiFi captive portal — any browser
+**Tabs**
 
-1. Flash `petbot_s3_wifi`. On first boot it raises an AP `PETBOT_SETUP` (password `petbot123`).
-2. Join the AP from your phone. Captive portal opens at `192.168.4.1`; if it doesn't, navigate manually.
-3. Pick your home WiFi, enter the password, save. The device reconnects to home WiFi.
-4. From any device on the same network: `http://petbot.local`.
+| Tab | What |
+|---|---|
+| Move | Live camera, joystick (walk magnitude < 0.7, run > 0.7), Stand / Stop |
+| Face | 18 kaomoji emotions sent to the C6 head |
+| Calibrate | 12 sliders grouped by leg, release / save / reload |
+| Settings | Switch between AP mode and joining your home WiFi |
 
-Hold **GPIO 0 low for 3 s during boot** to wipe saved credentials and re-enter the captive portal.
+### 2. Head display — `petbot_c6/petbot_c6.ino`
 
-### Camera stream
+Board: **Waveshare ESP32-C6-LCD-1.47**.
 
-Build with `petbot_s3_stream`. Once the device is on home WiFi, the
-MJPEG stream is at `http://petbot.local/stream`.
+**Arduino IDE Tools settings**
 
-### BLE / web command reference
+- Board: **ESP32C6 Dev Module**
+- USB CDC On Boot: Enabled
+- Partition Scheme: Default 4MB
+- Upload via the C6's USB-C port
 
-All commands flow `phone → S3 → C6`. The S3 dispatches them; commands
-that affect the C6 surface are translated into protocol frames before
-they leave the S3.
+**Libraries**
 
-| Command | Action |
-|---------|--------|
-| `MOVE:fwd` / `back` / `left` / `right` / `stop` | Drive |
-| `FACE:HAPPY` / `IDLE` / `SEARCH` / `CURIOUS` / `SLEEP` | Big-face mode + matching C6 status update |
-| `SAY:<text>` | TTS via I2S amp (when wired) |
-| `SOUND:BOOT` / `HAPPY` / `ALERT` | Built-in sound |
-| `SCREEN:<text>` | Debug: push one line of `PB_DRAW_TEXT` to the C6 |
-| `MODE:manual` / `auto` | Switch between manual control and the S3 state machine |
-| `STATUS` | Returns feature-flag report and link health |
+- Adafruit GFX Library
+- Adafruit ST7735 and ST7789 Library
 
----
+Flash, open Serial Monitor at 115200, type `FACE:HAPPY` + Enter → screen
+changes. Commands: `FACE:IDLE / HAPPY / SAD / CRY / ANGRY / LOVE /
+SLEEP / SEARCH / CURIOUS / WALK / RUN / TABLE_FLIP / SURPRISED / EXCITED
+/ COOL / EMBARRASSED / DIZZY / WINK / BLINK`, plus `PING`.
 
-## Reset WiFi credentials
+### 3. Wiring the bot → head over UART (later)
 
-Hold **GPIO 0** low for **3 seconds** during boot to erase saved
-credentials and re-enter setup mode. The serial monitor will confirm:
-`[WiFi] Credentials erased — starting setup portal`.
+Both sketches have a commented `Serial1.begin(...)` / `Serial2` line. When
+you want the bot to drive the C6 directly (instead of pasting `FACE:`
+commands manually), wire:
 
----
+- Body GPIO 4 (TX) → C6 GPIO 16 (Serial1 RX)
+- Body GND → C6 GND
 
-## Hardware enables (S3 brain)
+…and uncomment the matching lines in both sketches. The body already
+prints `FACE:` lines to Serial on every state change.
 
-Set the matching `#define` to `1` and fill the body in the relevant
-module to wire up real hardware. Until then the bot can BLE / web /
-stream but cannot drive, speak, or render a face:
+### 4. Calibration helper — `petbot_calibrate/petbot_calibrate.ino`
 
-- `MOTORS_ENABLED` — motor driver (TB6612 / DRV8833 / L298N)
-- `FACE_TFT_ENABLED` — big face TFT on FSPI / SPI3_HOST
-- `MIC_ENABLED` — I2S microphone (INMP441 …)
-- `SPEAKER_ENABLED` — I2S amplifier (MAX98357A …)
+If you ever need to find the home pose again (after re-assembling, a
+servo swap, etc.):
 
-The C6 thin client has no such flags — it always renders whatever the
-S3 sends and always polls the BOOT button (and any extra button GPIOs
-the firmware is configured for).
+1. Flash `petbot_calibrate.ino` (same board / Tools settings as `petbot.ino`).
+2. Join WiFi `PetBot_Cal` (`petbot123`) → `http://192.168.4.1`.
+3. Use **Wiggle** if you forget which channel is which.
+4. Slide each joint to neutral, tap **Wave demo** to verify clean lift on
+   each leg, tap **Show home values**.
+5. Copy the resulting `HOME_US[]` block into `petbot.ino` near the top.
 
----
+### Reset WiFi back to AP
 
-## Troubleshooting
+If you switched to "Home WiFi" and can't reach Marvin: power off, hold
+**BOOT**, power back on, keep holding 3 s. WiFi config is wiped → next
+boot is AP mode.
 
-| Symptom | Fix |
-|---------|-----|
-| C6 screen stays black on boot | Check the reserved display pins (`6, 7, 14, 15, 21, 22`) aren't reused; verify `setRotation(1)`; backlight on `GPIO22` |
-| C6 screen says "PetBot — waiting" forever | S3 isn't sending; check UART wiring (S3 GPIO17 → C6 RX, S3 GPIO18 → C6 TX, GND), confirm both at 921600 8N1, and check the S3 serial log for `PB_HELLO` reception |
-| Buttons on the C6 don't move the menu | The C6 sends `PB_BTN_EVENT`; check the S3 serial log for that frame, and that the menu controller is mapping the button id |
-| `PETBOT_SETUP` AP doesn't appear | Compiled with `-DPETBOT_ENABLE_WIFI=1`? Partition `huge_app.csv`? Check `[WiFi]` lines in serial |
-| `petbot.local` doesn't resolve | Same network as the bot? Try the IP printed in the serial log |
-| BLE picker doesn't show PetBot | Check `[BLE] Advertising` in serial; stay within ~5 m; only Chrome / Edge support Web Bluetooth |
-| Compile error about flash size on S3 | Use the `huge_app.csv` partition; `petbot_s3*` envs already do |
+## Status
+
+- Body: WiFi AP + web UI ✓, calibration ✓, joystick gait engine ✓,
+  touch sensor ✓, camera (needs `esp32` board package 2.0.14+ for
+  OV3660 PID recognition) — falls back gracefully if camera init fails.
+- Head: 18 kaomoji faces with idle glance + blink + yawn animations,
+  bot ↔ head UART link awaiting physical wiring.
+
+## Known issues
+
+- **OV3660 camera "not supported"**: update Arduino IDE's "esp32 by
+  Espressif Systems" to **3.x** via Boards Manager. Earlier versions
+  only included the OV2640 chip ID in the bundled camera driver.
+- **Joystick walking direction is wrong**: flip the relevant entries
+  in `LEG_SIGN[4]` at the top of `petbot.ino`. The hip / thigh / calf
+  signs are calibrated guesses based on the home-pose mirror pattern;
+  they're easy to flip per leg if the dog walks sideways or backwards.

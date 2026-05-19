@@ -1,17 +1,11 @@
-# PlatformIO
-.pio/
-.pioenvs/
-.piolibdeps/
-.vscode/
-.clang_complete
-.gcc-flags.json
-.cache/
-
-# Host-side test build artifacts
-shared/protocol/tests/*.o
-shared/protocol/tests/test_frame
+# Arduino IDE
+build/
+*.bin
+*.elf
+*.hex
 
 # Editor / OS
+.vscode/
 .idea/
 *.swp
 .DS_Store
