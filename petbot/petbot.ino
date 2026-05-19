@@ -89,6 +89,14 @@
 // disable by setting -1.
 #define TOUCH_PIN  15
 
+// Onboard LEDs on the Freenove WROVER CAM. Both forced OFF at boot; you
+// can toggle them from the Move tab or via /led endpoint at runtime.
+//   FLASH  = white front LED on GPIO 4   (active HIGH — HIGH = on)
+//   STATUS = red status LED on GPIO 33   (active LOW  — LOW  = on)
+// Set either to -1 to leave the pin uninitialised.
+#define LED_FLASH_PIN   4
+#define LED_STATUS_PIN  33
+
 // ─── Servo layout ───────────────────────────────────────────────────────
 // PCA9685 channel → physical leg+joint mapping for THIS robot.
 // Grouped FL, FR, BL, BR with [hip, thigh, calf] inside each leg.
@@ -168,6 +176,10 @@ static volatile bool s_gait_request_home = false;
 // Touch
 static bool     s_touch_pressed     = false;
 static uint32_t s_touch_press_at    = 0;
+
+// LED state (true = lit)
+static bool     s_led_flash_on  = false;
+static bool     s_led_status_on = false;
 
 // Auto-FACE state (printed to Serial as it changes)
 static const char* s_face_state = "IDLE";
@@ -343,6 +355,28 @@ static void gait_task_fn(void* /*arg*/) {
     }
 }
 
+// ─── LEDs ───────────────────────────────────────────────────────────────
+static void led_flash(bool on) {
+    if (LED_FLASH_PIN < 0) return;
+    digitalWrite(LED_FLASH_PIN, on ? HIGH : LOW);   // active HIGH
+    s_led_flash_on = on;
+}
+static void led_status(bool on) {
+    if (LED_STATUS_PIN < 0) return;
+    digitalWrite(LED_STATUS_PIN, on ? LOW : HIGH);  // active LOW
+    s_led_status_on = on;
+}
+static void leds_init() {
+    if (LED_FLASH_PIN >= 0) {
+        pinMode(LED_FLASH_PIN, OUTPUT);
+        digitalWrite(LED_FLASH_PIN, LOW);          // OFF
+    }
+    if (LED_STATUS_PIN >= 0) {
+        pinMode(LED_STATUS_PIN, OUTPUT);
+        digitalWrite(LED_STATUS_PIN, HIGH);        // OFF (active low)
+    }
+}
+
 // ─── Touch sensor ───────────────────────────────────────────────────────
 static void poll_touch() {
     if (TOUCH_PIN < 0) return;
@@ -462,6 +496,13 @@ input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--a
     <button class="btn primary" onclick="c('HOME')">Stand at home</button>
     <button class="btn danger" onclick="stop()">Stop</button>
   </div>
+  <div class="card">
+    <div class="card-title">Onboard LEDs</div>
+    <div class="actions">
+      <button class="btn" id="btn-flash" onclick="ledToggle('flash')">💡 Flash LED · off</button>
+      <button class="btn" id="btn-status" onclick="ledToggle('status')">🔴 Status LED · off</button>
+    </div>
+  </div>
 </section>
 
 <section id="tab-face" class="tab">
@@ -486,6 +527,11 @@ input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--a
       <button class="btn" onclick="f('TABLE_FLIP')">┻━┻ flip</button>
       <button class="btn" onclick="f('WALK')">walk anim</button>
       <button class="btn" onclick="f('RUN')">run anim</button>
+      <button class="btn" onclick="f('CONTENT')">(─‿‿─) content</button>
+      <button class="btn" onclick="f('CHILL')">(¬‿¬) chill</button>
+      <button class="btn" onclick="f('BEAR')">ʕ•ᴥ•ʔ bear</button>
+      <button class="btn" onclick="f('PEEK')">(◕‿◕) peek</button>
+      <button class="btn" onclick="f('MISCHIEF')">(ಠ‿ಠ) mischief</button>
     </div>
   </div>
 </section>
@@ -545,6 +591,15 @@ function camOff(){$('cam').style.display='none';$('cam-off').style.display='flex
 function c(cmd){return fetchTxt('/cmd?c='+encodeURIComponent(cmd)).then(toast);}
 function f(face){return fetchTxt('/face?n='+encodeURIComponent(face)).then(toast);}
 function stop(){return fetchTxt('/stop').then(toast);}
+function ledToggle(which){
+  fetchTxt('/led?which='+which+'&state=toggle').then(t=>{
+    toast(t);
+    const on=/ON$/i.test(t);
+    const btn=$('btn-'+which);
+    btn.textContent=(which==='flash'?'💡 Flash LED · ':'🔴 Status LED · ')+(on?'on':'off');
+    btn.classList.toggle('primary',on);
+  });
+}
 
 // Status pill
 function refreshStatus(){
@@ -802,6 +857,31 @@ static esp_err_t handle_touch(httpd_req_t* r) {
     return ESP_OK;
 }
 
+// /led?which=flash|status&state=on|off|toggle
+static esp_err_t handle_led(httpd_req_t* r) {
+    char q[64] = {}, whichBuf[16] = {}, stateBuf[16] = {};
+    if (httpd_req_get_url_query_str(r, q, sizeof(q)) == ESP_OK) {
+        httpd_query_key_value(q, "which", whichBuf, sizeof(whichBuf));
+        httpd_query_key_value(q, "state", stateBuf, sizeof(stateBuf));
+    }
+    bool target = false;
+    bool is_flash = (strcmp(whichBuf, "flash") == 0);
+    bool is_status = (strcmp(whichBuf, "status") == 0);
+    if (!is_flash && !is_status) {
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "which=flash|status");
+    }
+    if      (strcmp(stateBuf, "on")     == 0) target = true;
+    else if (strcmp(stateBuf, "off")    == 0) target = false;
+    else if (strcmp(stateBuf, "toggle") == 0) target = is_flash ? !s_led_flash_on : !s_led_status_on;
+    else target = false;
+    if (is_flash) led_flash(target);
+    else          led_status(target);
+    char reply[40];
+    snprintf(reply, sizeof(reply), "%s LED %s", is_flash ? "flash" : "status", target ? "ON" : "OFF");
+    httpd_resp_sendstr(r, reply);
+    return ESP_OK;
+}
+
 static esp_err_t handle_set_wifi(httpd_req_t* r) {
     char q[256] = {};
     if (httpd_req_get_url_query_str(r, q, sizeof(q)) != ESP_OK)
@@ -945,7 +1025,7 @@ static void init_wifi() {
 static void init_http() {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
-    cfg.max_uri_handlers = 16;
+    cfg.max_uri_handlers = 20;
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) {
         Serial.println("[http] httpd_start FAILED");
         return;
@@ -965,6 +1045,7 @@ static void init_http() {
         { "/home",        HTTP_GET, handle_home_json,    nullptr },
         { "/status",      HTTP_GET, handle_status,       nullptr },
         { "/touch",       HTTP_GET, handle_touch,        nullptr },
+        { "/led",         HTTP_GET, handle_led,          nullptr },
         { "/set_wifi",    HTTP_GET, handle_set_wifi,     nullptr },
     };
     for (auto& u : routes) httpd_register_uri_handler(s_httpd, &u);
@@ -1000,6 +1081,10 @@ void setup() {
         pinMode(TOUCH_PIN, INPUT);
         Serial.printf("[touch] sensor on GPIO %d\n", TOUCH_PIN);
     }
+
+    // Force both onboard LEDs OFF at boot — they default high otherwise.
+    leds_init();
+    Serial.println("[led] flash + status forced OFF");
 
     s_camera_ok = init_camera();
     s_pca_ok    = init_pca9685();

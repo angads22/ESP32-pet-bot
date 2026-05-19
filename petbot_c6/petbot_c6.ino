@@ -84,6 +84,12 @@ enum FaceMode : uint8_t {
     F_IDLE = 0, F_HAPPY, F_SAD, F_CRY, F_ANGRY, F_LOVE,
     F_SLEEP, F_SEARCH, F_CURIOUS, F_WALK, F_RUN, F_TABLE_FLIP,
     F_SURPRISED, F_EXCITED, F_COOL, F_EMBARRASSED, F_DIZZY, F_WINK,
+    // New cute idle-ish faces:
+    F_CONTENT,   // (─‿‿─)   closed-curve smiling eyes
+    F_CHILL,     // (¬‿¬)    half-closed eyes + smirk
+    F_BEAR,      // ʕ•ᴥ•ʔ    bear face with ears + snout
+    F_PEEK,      // (◕‿◕)    big eyes + soft smile
+    F_MISCHIEF,  // (ಠ‿ಠ)    ringed eyes + sly brow + smirk
 };
 
 // ─── State ──────────────────────────────────────────────────────────────
@@ -408,6 +414,11 @@ static void render() {
         case F_SURPRISED:    bg = 0x0410; break;
         case F_COOL:         bg = 0x10a2; break;   // dark teal
         case F_WINK:         bg = 0x0220; break;
+        case F_CONTENT:      bg = 0x1124; break;   // soft warm grey
+        case F_CHILL:        bg = 0x0210; break;   // dark teal
+        case F_BEAR:         bg = 0x4A28; break;   // chocolate
+        case F_PEEK:         bg = 0x4124; break;   // soft pink
+        case F_MISCHIEF:     bg = 0x2007; break;   // dark purple
         default:             bg = C_BLACK;
     }
     tft.fillScreen(bg);
@@ -581,6 +592,80 @@ static void render() {
                              EYE_L_X + 25, EYE_Y - 8, C_PINK);
             break;
 
+        case F_CONTENT:
+            // (─‿‿─) — closed-curve smiling eyes, tiny resting mouth.
+            mouth_smile(EYE_L_X, EYE_Y + 3, 32, 10);
+            mouth_smile(EYE_R_X, EYE_Y + 3, 32, 10);
+            mouth_line(SCR_W / 2, 132, 18);
+            break;
+
+        case F_CHILL:
+            // (¬‿¬) — top bar of eye + angled close-off, smug smirk.
+            for (int t = 0; t < 4; t++) {
+                tft.drawLine(EYE_L_X - 18, EYE_Y - 6 + t, EYE_L_X + 14, EYE_Y - 6 + t, C_WHITE);
+                tft.drawLine(EYE_R_X - 18, EYE_Y - 6 + t, EYE_R_X + 14, EYE_Y - 6 + t, C_WHITE);
+            }
+            // angled lash-end closing off the eye
+            for (int t = 0; t < 3; t++) {
+                tft.drawLine(EYE_L_X + 14, EYE_Y - 6 + t, EYE_L_X + 22, EYE_Y + 2 + t, C_WHITE);
+                tft.drawLine(EYE_R_X + 14, EYE_Y - 6 + t, EYE_R_X + 22, EYE_Y + 2 + t, C_WHITE);
+            }
+            mouth_smirk(SCR_W / 2 - 4, 130);
+            break;
+
+        case F_BEAR: {
+            // ʕ•ᴥ•ʔ — bear ears, snout, dot eyes, little nose, mini ᴥ mouth.
+            // Ears
+            tft.fillCircle(46,         42, 22, C_BROWN);
+            tft.fillCircle(SCR_W - 46, 42, 22, C_BROWN);
+            tft.fillCircle(46,         42, 11, 0xCBE9);
+            tft.fillCircle(SCR_W - 46, 42, 11, 0xCBE9);
+            // Eye dots
+            tft.fillCircle(EYE_L_X, EYE_Y, 7, C_WHITE);
+            tft.fillCircle(EYE_R_X, EYE_Y, 7, C_WHITE);
+            tft.fillCircle(EYE_L_X - 2, EYE_Y - 2, 2, C_BLACK);
+            tft.fillCircle(EYE_R_X - 2, EYE_Y - 2, 2, C_BLACK);
+            // Snout
+            tft.fillRoundRect(SCR_W / 2 - 30, 108, 60, 36, 18, 0xEF1B);
+            // Nose triangle
+            tft.fillTriangle(SCR_W / 2 - 6, 118, SCR_W / 2 + 6, 118,
+                             SCR_W / 2,     127, C_BLACK);
+            // ᴥ mouth — two small upward arcs side by side under the nose
+            mouth_smile(SCR_W / 2 - 8, 138, 12, 5, C_BLACK);
+            mouth_smile(SCR_W / 2 + 8, 138, 12, 5, C_BLACK);
+            break;
+        }
+
+        case F_PEEK:
+            // (◕‿◕) — chubby round eyes with low pupils, soft smile.
+            tft.fillCircle(EYE_L_X, EYE_Y, 18, C_WHITE);
+            tft.fillCircle(EYE_R_X, EYE_Y, 18, C_WHITE);
+            tft.fillCircle(EYE_L_X, EYE_Y + 4, 7, C_BLACK);
+            tft.fillCircle(EYE_R_X, EYE_Y + 4, 7, C_BLACK);
+            // tiny eye shine
+            tft.fillCircle(EYE_L_X - 4, EYE_Y + 1, 2, C_WHITE);
+            tft.fillCircle(EYE_R_X - 4, EYE_Y + 1, 2, C_WHITE);
+            mouth_smile(SCR_W / 2, 130, 30, 7);
+            draw_blush(50, 110);
+            draw_blush(SCR_W - 65, 110);
+            break;
+
+        case F_MISCHIEF:
+            // (ಠ‿ಠ) — ringed eye outlines + thin angled brow + smug smirk.
+            tft.drawCircle(EYE_L_X, EYE_Y + 2, 14, C_WHITE);
+            tft.drawCircle(EYE_L_X, EYE_Y + 2, 13, C_WHITE);
+            tft.fillCircle(EYE_L_X, EYE_Y + 2, 4, C_WHITE);
+            tft.drawCircle(EYE_R_X, EYE_Y + 2, 14, C_WHITE);
+            tft.drawCircle(EYE_R_X, EYE_Y + 2, 13, C_WHITE);
+            tft.fillCircle(EYE_R_X, EYE_Y + 2, 4, C_WHITE);
+            // angled brows tilted toward the center (sneaky)
+            for (int t = 0; t < 3; t++) {
+                tft.drawLine(EYE_L_X - 16, EYE_Y - 14 + t, EYE_L_X + 12, EYE_Y - 22 + t, C_WHITE);
+                tft.drawLine(EYE_R_X - 12, EYE_Y - 22 + t, EYE_R_X + 16, EYE_Y - 14 + t, C_WHITE);
+            }
+            mouth_smirk(SCR_W / 2 - 4, 130);
+            break;
+
         case F_IDLE:
         default:
             eye_dot(EYE_L_X, EYE_Y, gx, gy);
@@ -611,6 +696,11 @@ static const char* face_name(FaceMode f) {
         case F_EMBARRASSED: return "EMBARRASSED";
         case F_DIZZY:       return "DIZZY";
         case F_WINK:        return "WINK";
+        case F_CONTENT:     return "CONTENT";
+        case F_CHILL:       return "CHILL";
+        case F_BEAR:        return "BEAR";
+        case F_PEEK:        return "PEEK";
+        case F_MISCHIEF:    return "MISCHIEF";
         default:            return "?";
     }
 }
@@ -634,6 +724,11 @@ static bool parse_face(const String& s, FaceMode& out) {
     else if (s == "EMBARRASSED" || s == "SHY") out = F_EMBARRASSED;
     else if (s == "DIZZY")        out = F_DIZZY;
     else if (s == "WINK")         out = F_WINK;
+    else if (s == "CONTENT")      out = F_CONTENT;
+    else if (s == "CHILL")        out = F_CHILL;
+    else if (s == "BEAR")         out = F_BEAR;
+    else if (s == "PEEK")         out = F_PEEK;
+    else if (s == "MISCHIEF" || s == "SLY") out = F_MISCHIEF;
     else return false;
     return true;
 }
