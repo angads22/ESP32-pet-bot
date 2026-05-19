@@ -41,46 +41,6 @@ soon as it sees `PB_HELLO` from the C6 on boot.
 
 ---
 
-## Freenove ESP32 Dog — GPIO reference
-
-### Which GPIO leads to the servo rug (PCA9685)?
-
-The "rug" is the PCA9685 16-channel PWM servo driver board that all
-12 leg servos plug into.  Two I²C lines connect the ESP32-CAM to it:
-
-| ESP32-CAM GPIO | PCA9685 pin | Note |
-|---|---|---|
-| `GPIO 13` | `SDA` | I²C data — this wire **leads to the rug** |
-| `GPIO 14` | `SCL` | I²C clock — this wire **leads to the rug** |
-| `3.3 V` | `VCC` | PCA9685 logic power |
-| `GND` | `GND` | common ground (also tie servo-battery GND here) |
-| external 5–6 V | `V+` | servo motor power — do **not** use raw battery voltage |
-
-### Free GPIOs for expansion
-
-After allocating I²C for the PCA9685, the following GPIOs are
-unassigned on the Freenove dog board and available for sensors, UART
-to a display board, LEDs, etc.:
-
-| GPIO | Direction | Notes |
-|---|---|---|
-| `4` | output / input | **recommended TX pin to C6 screen** |
-| `15` | output / input | recommended RX pin from C6 screen |
-| `21` | output / input | |
-| `22` | output / input | |
-| `23` | output / input | |
-| `32` | output / input | |
-| `33` | output / input | |
-| `34` | **input only** | no internal pull-up; cannot drive output |
-| `35` | **input only** | no internal pull-up |
-| `36 (VP)` | **input only** | ADC / battery sense on some Freenove boards |
-| `39 (VN)` | **input only** | ADC |
-
-> **Boot-sensitive:** GPIO 0 and GPIO 2 affect the boot mode.  Use them
-> with care and never pull them low at power-on.
-
----
-
 ## Wiring (UART transport, default)
 
 Three wires between the boards:
@@ -93,19 +53,26 @@ Three wires between the boards:
 
 UART runs at **921600 8N1**. Common ground is non-negotiable.
 
-### Connections: Freenove ESP32-CAM board → C6-LCD-1.47
+### Current C6 face-sketch wiring (GPIO control path)
 
-Use free GPIO 4 (TX) and 15 (RX) on the dog board to drive the C6
-display.  The C6 sketch already listens on `Serial1 RX=GPIO16, TX=GPIO17`.
+The current `firmware/c6_display_client/petbot_c6.ino` now enables:
 
-| Freenove ESP32-CAM | C6-LCD-1.47 | Purpose |
-|---|---|---|
-| `GPIO 4` (free TX) | `GPIO 16` (Serial1 RX) | S3 → C6 commands (required) |
-| `GPIO 15` (free RX) | `GPIO 17` (Serial1 TX) | C6 → S3 button events (optional) |
-| `GND` | `GND` | common ground (required) |
+- `Serial1` on the C6 with `RX=GPIO16`, `TX=GPIO17`, `921600 8N1`
+- command pump from both `Serial` (USB) and `Serial1` (main board link)
 
-> The C6's **display pins** `6, 7, 14, 15, 21, 22` are wired on-board to
-> the ST7789 — do **not** connect anything to those pins.
+So the minimum board-to-board connection to let the main board control
+the C6 screen is:
+
+| Main board (cam board) | C6-LCD-1.47 |
+|---|---|
+| TX GPIO (example: ESP32-CAM GPIO4 TX) | `GPIO16` (Serial1 RX) |
+| GND | GND |
+
+Optional return channel for two-way UART:
+
+| Main board (cam board) | C6-LCD-1.47 |
+|---|---|
+| RX GPIO (board-specific free pin) | `GPIO17` (Serial1 TX) |
 
 ### C6 GPIO availability (practical)
 
