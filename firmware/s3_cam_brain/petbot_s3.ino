@@ -730,9 +730,19 @@ static esp_err_t h_stream(httpd_req_t* r) {
 
     char part_hdr[80];
     esp_err_t res = ESP_OK;
+    uint8_t fail_count = 0;
     while (res == ESP_OK) {
         camera_fb_t* fb = esp_camera_fb_get();
-        if (!fb) { Serial.println("[cam] frame capture failed"); continue; }
+        if (!fb) {
+            Serial.println("[cam] frame capture failed");
+            if (++fail_count >= 10) {
+                Serial.println("[cam] too many failures, closing stream");
+                break;
+            }
+            delay(50);
+            continue;
+        }
+        fail_count = 0;
 
         int hlen = snprintf(part_hdr, sizeof(part_hdr),
                             "\r\n--PetBotFrame\r\nContent-Type: image/jpeg\r\n"
@@ -779,7 +789,7 @@ void setup() {
                   WiFi.softAPIP().toString().c_str());
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 14;  // 8 existing + /stream + head room
+    cfg.max_uri_handlers = 14;  // 8 base routes + /stream (optional) + head room
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) {
         Serial.println("[http] start FAILED");
         return;
