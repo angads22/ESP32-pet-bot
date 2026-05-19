@@ -88,7 +88,7 @@ static void servo_release(uint8_t ch) {
 static const char PAGE_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PetBot calibration</title>
+<title>PetBot Motion + Calibration</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",system-ui,sans-serif}
 body{background:radial-gradient(110% 110% at 10% -10%,#2a3559 0%,#101426 40%,#070910 100%);color:#f2f4f8;margin:0 auto;padding:14px;max-width:560px}
@@ -109,8 +109,9 @@ h1{margin:8px 0 6px;font-size:20px;letter-spacing:.01em;text-align:center;color:
 .actions button.demo{background:linear-gradient(135deg,#1ed760,#1aa34a);border-color:#1ed760;color:#08140a}
 pre#out{background:rgba(2,6,18,.72);border:1px solid rgba(255,255,255,.2);border-radius:14px;padding:10px;color:#b6f9c8;font:12px ui-monospace,monospace;overflow-x:auto;white-space:pre-wrap;display:none;margin-top:8px}
 .copy{display:none;margin-top:8px;padding:8px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff}
+.status{margin-top:10px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.08);font:12px ui-monospace,monospace;color:#dfffe8;white-space:pre-wrap}
 </style></head><body>
-<h1>PetBot calibration</h1>
+<h1>PetBot Motion + Calibration</h1>
 <p class="hint">
   Per joint: tap <b>Release</b> → physically move that joint where it should sit in a clean standing pose → drag the slider until the servo grabs at that position. Use the green <b>Wiggle</b> button if you forget which servo is which. When the whole dog stands cleanly, tap <b>Show home values</b> below, screenshot or copy the output, and send it back.
 </p>
@@ -120,13 +121,17 @@ pre#out{background:rgba(2,6,18,.72);border:1px solid rgba(255,255,255,.2);border
 <div class="actions">
   <button class="primary" onclick="showHome()">Show home values</button>
   <button class="demo" onclick="walk()">Walk cycle</button>
+  <button class="demo" onclick="run()">Run cycle</button>
   <button class="demo" onclick="demo()">Wave demo</button>
+  <button onclick="cameraReady()">Camera check</button>
+  <button onclick="llmReady()">Vision/LLM check</button>
   <button onclick="releaseAll()">Release all</button>
   <button onclick="centerAll()">All to 1500 µs</button>
 </div>
 
 <pre id="out"></pre>
 <button class="copy" id="copy" onclick="copyOut()">Copy</button>
+<div class="status" id="status">status: ready</div>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -172,7 +177,9 @@ build();
 function r(ch){fetch('/release?ch='+ch)}
 function wig(ch){fetch('/wiggle?ch='+ch)}
 function demo(){fetch('/demo_wave')}
-function walk(){fetch('/walk')}
+function setStatus(msg){ $('status').textContent = 'status: ' + msg; }
+function walk(){setStatus('walking...'); fetch('/walk').then(()=>setStatus('walk complete')).catch(()=>setStatus('walk failed'))}
+function run(){setStatus('running...'); fetch('/run').then(()=>setStatus('run complete')).catch(()=>setStatus('run failed'))}
 function releaseAll(){fetch('/release_all')}
 function centerAll(){
   document.querySelectorAll('input[type=range]').forEach(s=>{
@@ -205,6 +212,12 @@ function copyOut(){
     ()=>{ $('copy').textContent='Copied!'; setTimeout(()=>$('copy').textContent='Copy',1500); },
     ()=>{ alert('Select the text above and copy manually.'); }
   );
+}
+function cameraReady(){
+  fetch('/camera_status').then(r=>r.json()).then(v=>setStatus(`camera=${v.camera} stream=${v.stream_url}`)).catch(()=>setStatus('camera check failed'));
+}
+function llmReady(){
+  fetch('/ai_status').then(r=>r.json()).then(v=>setStatus(`vision=${v.vision_pipeline} llm=${v.llm_bridge} endpoint=${v.next_endpoint}`)).catch(()=>setStatus('vision/llm check failed'));
 }
 </script>
 </body></html>)HTML";
@@ -293,6 +306,11 @@ static inline bool leg_in_tripod(uint8_t leg, const uint8_t tripod[2]) {
     return leg == tripod[0] || leg == tripod[1];
 }
 
+// Left/right mirrored hip direction (L legs positive, R legs negative).
+static inline int8_t hip_side_sign(uint8_t leg) {
+    return (leg == 0 || leg == 2) ? 1 : -1; // FL/BL = +1, FR/BR = -1
+}
+
 // Simple alternating-tripod walk demo:
 // step A lifts FL+BR, then step B lifts FR+BL.
 static esp_err_t h_walk(httpd_req_t* r) {
@@ -312,7 +330,7 @@ static esp_err_t h_walk(httpd_req_t* r) {
             const uint16_t thighBase = thighHome[leg];
             const uint16_t calfBase = calfHome[leg];
 
-            const int16_t hipDelta = lift ? activeHip : supportHip;
+            const int16_t hipDelta = (lift ? activeHip : supportHip) * hip_side_sign(leg);
             const int16_t thighDelta = lift ? -90 : 45;
             const int16_t calfDelta = lift ? 140 : -50;
 
@@ -337,6 +355,55 @@ static esp_err_t h_walk(httpd_req_t* r) {
     }
     Serial.println("[demo] walk cycle end");
     httpd_resp_sendstr(r, "ok walk");
+    return ESP_OK;
+}
+
+// Faster cadence with larger hip swing for a "run-like" bench test.
+static esp_err_t h_run(httpd_req_t* r) {
+    const uint8_t tripodA[2] = { 0, 3 }; // FL + BR
+    const uint8_t tripodB[2] = { 1, 2 }; // FR + BL
+    uint16_t hipHome[4], thighHome[4], calfHome[4];
+    for (uint8_t leg = 0; leg < 4; leg++) {
+        hipHome[leg] = s_us[HIP_CH[leg]];
+        thighHome[leg] = s_us[THIGH_CH[leg]];
+        calfHome[leg] = s_us[CALF_CH[leg]];
+    }
+
+    auto step = [&hipHome, &thighHome, &calfHome](const uint8_t active[2], int16_t activeHip, int16_t supportHip) {
+        for (uint8_t leg = 0; leg < 4; leg++) {
+            const bool lift = leg_in_tripod(leg, active);
+            const int16_t hipDelta = (lift ? activeHip : supportHip) * hip_side_sign(leg);
+            servo_set_us(HIP_CH[leg], clamp_servo_pulse((int32_t)hipHome[leg] + hipDelta));
+            servo_set_us(THIGH_CH[leg], clamp_servo_pulse((int32_t)thighHome[leg] + (lift ? -130 : 65)));
+            servo_set_us(CALF_CH[leg], clamp_servo_pulse((int32_t)calfHome[leg] + (lift ? 190 : -80)));
+        }
+        delay(170);
+    };
+
+    Serial.println("[demo] run cycle start");
+    for (uint8_t i = 0; i < 5; i++) {
+        step(tripodA, +170, -120);
+        step(tripodB, -170, +120);
+    }
+    for (uint8_t leg = 0; leg < 4; leg++) {
+        servo_set_us(HIP_CH[leg], hipHome[leg]);
+        servo_set_us(THIGH_CH[leg], thighHome[leg]);
+        servo_set_us(CALF_CH[leg], calfHome[leg]);
+    }
+    Serial.println("[demo] run cycle end");
+    httpd_resp_sendstr(r, "ok run");
+    return ESP_OK;
+}
+
+static esp_err_t h_camera_status(httpd_req_t* r) {
+    httpd_resp_set_type(r, "application/json");
+    httpd_resp_sendstr(r, "{\"camera\":\"ready_for_ov2640\",\"stream_url\":\"http://192.168.4.1/stream\",\"note\":\"stub for calibration sketch\"}");
+    return ESP_OK;
+}
+
+static esp_err_t h_ai_status(httpd_req_t* r) {
+    httpd_resp_set_type(r, "application/json");
+    httpd_resp_sendstr(r, "{\"vision_pipeline\":\"prepared\",\"llm_bridge\":\"prepared\",\"next_endpoint\":\"/vision_llm\"}");
     return ESP_OK;
 }
 
@@ -379,7 +446,7 @@ void setup() {
                   WiFi.softAPIP().toString().c_str());
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 12;
+    cfg.max_uri_handlers = 16;
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) {
         Serial.println("[http] start FAILED");
         return;
@@ -391,7 +458,10 @@ void setup() {
         { "/release_all", HTTP_GET, h_release_all, nullptr },
         { "/wiggle",      HTTP_GET, h_wiggle,      nullptr },
         { "/walk",        HTTP_GET, h_walk,        nullptr },
+        { "/run",         HTTP_GET, h_run,         nullptr },
         { "/demo_wave",   HTTP_GET, h_demo_wave,   nullptr },
+        { "/camera_status", HTTP_GET, h_camera_status, nullptr },
+        { "/ai_status",   HTTP_GET, h_ai_status,   nullptr },
         { "/home",        HTTP_GET, h_home,        nullptr },
     };
     for (auto& u : routes) httpd_register_uri_handler(s_httpd, &u);
