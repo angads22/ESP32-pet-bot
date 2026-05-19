@@ -74,6 +74,21 @@ Optional return channel for two-way UART:
 |---|---|
 | RX GPIO (board-specific free pin) | `GPIO17` (Serial1 TX) |
 
+### Display wiring quick reference (what to connect)
+
+For the Waveshare ESP32-C6-LCD-1.47 display client used by `petbot_c6`,
+the onboard screen is pre-wired. Keep these pins dedicated to the display:
+
+- `GPIO6` MOSI
+- `GPIO7` SCLK
+- `GPIO14` CS
+- `GPIO15` DC
+- `GPIO21` RST
+- `GPIO22` backlight
+
+Use `GPIO16` (RX) and `GPIO17` (TX) on the C6 for the UART link from the
+main board.
+
 ### C6 GPIO availability (practical)
 
 - **Reserved by onboard display/backlight**: `6, 7, 14, 15, 21, 22`
@@ -119,6 +134,7 @@ they leave the S3.
 | Command | Action |
 |---------|--------|
 | `MOVE:fwd` / `back` / `left` / `right` / `stop` | Drive |
+| `MOVE:walk` / `MOVE:run` | Trigger gait demos (when supported by current sketch) |
 | `FACE:HAPPY` / `IDLE` / `SEARCH` / `CURIOUS` / `SLEEP` | Big-face mode + matching C6 status update |
 | `SAY:<text>` | TTS via I2S amp (when wired) |
 | `SOUND:BOOT` / `HAPPY` / `ALERT` | Built-in sound |
