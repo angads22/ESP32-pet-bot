@@ -53,6 +53,34 @@ Three wires between the boards:
 
 UART runs at **921600 8N1**. Common ground is non-negotiable.
 
+### Current C6 face-sketch wiring (GPIO control path)
+
+The current `firmware/c6_display_client/petbot_c6.ino` now enables:
+
+- `Serial1` on the C6 with `RX=GPIO16`, `TX=GPIO17`, `921600 8N1`
+- command pump from both `Serial` (USB) and `Serial1` (main board link)
+
+So the minimum board-to-board connection to let the main board control
+the C6 screen is:
+
+| Main board (cam board) | C6-LCD-1.47 |
+|---|---|
+| TX GPIO (example: ESP32-CAM GPIO4 TX) | `GPIO16` (Serial1 RX) |
+| GND | GND |
+
+Optional return channel for two-way UART:
+
+| Main board (cam board) | C6-LCD-1.47 |
+|---|---|
+| RX GPIO (board-specific free pin) | `GPIO17` (Serial1 TX) |
+
+### C6 GPIO availability (practical)
+
+- **Reserved by onboard display/backlight**: `6, 7, 14, 15, 21, 22`
+- **Used by C6 UART screen link in current sketch**: `16, 17`
+- Treat remaining exposed GPIO as candidate free pins after checking your
+  exact carrier-board schematic.
+
 For USB-CDC transport (later milestone) the S3 hosts a USB CDC port and
 the C6's default `Serial` becomes the link — see `BRINGUP.md` and the
 TODO comment in `firmware/s3_cam_brain/petbot_s3.ino`.

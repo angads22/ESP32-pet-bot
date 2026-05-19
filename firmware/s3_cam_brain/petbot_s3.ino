@@ -62,6 +62,8 @@ const uint8_t LEG_CH[12] = { 1, 2, 3,  5, 6, 7,  8, 9, 10, 13, 14, 15 };
 
 // The 4 "calf" channels (each leg's bottom joint) — used by Wave demo.
 const uint8_t CALF_CH[4] = { 2, 13, 5, 10 };   // FL, FR, BL, BR
+const uint8_t THIGH_CH[4] = { 1, 14, 6, 9 };   // FL, FR, BL, BR
+const uint8_t HIP_CH[4] = { 3, 15, 7, 8 };     // FL, FR, BL, BR
 
 static Adafruit_PWMServoDriver pca(PCA9685_ADDR);
 static uint16_t s_us[16] = {0};
@@ -88,25 +90,25 @@ static const char PAGE_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PetBot calibration</title>
 <style>
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;font-family:system-ui,sans-serif}
-body{background:#0a0a14;color:#e7e9ee;margin:0 auto;padding:14px;max-width:560px}
-h1{color:#e94560;margin:6px 0 4px;font-size:18px;text-align:center}
-.hint{font-size:12px;color:#9aa0b4;line-height:1.5;margin:6px 0 12px}
-.leg-group{background:#0f1322;border:1px solid #1f2236;border-radius:8px;padding:10px 12px;margin-bottom:12px}
-.leg-group h3{margin:0 0 8px;color:#e94560;font-size:13px;text-transform:uppercase;letter-spacing:.06em}
-.row{display:flex;align-items:center;gap:6px;margin:6px 0}
-.row .ch{font:600 12px ui-monospace,monospace;color:#e94560;flex:0 0 44px}
-.row .joint{font-size:12px;color:#9aa0b4;flex:0 0 44px}
-.row input[type=range]{flex:1;accent-color:#e94560;min-width:0}
-.row .us{font:12px ui-monospace,monospace;color:#9aa0b4;min-width:48px;text-align:right}
-.row button{padding:5px 8px;background:#16213e;color:#fff;border:1px solid #1f2236;border-radius:5px;font-size:11px;cursor:pointer}
-.row button.w{background:#2a5;border-color:#2a5}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",system-ui,sans-serif}
+body{background:radial-gradient(110% 110% at 10% -10%,#2a3559 0%,#101426 40%,#070910 100%);color:#f2f4f8;margin:0 auto;padding:14px;max-width:560px}
+h1{margin:8px 0 6px;font-size:20px;letter-spacing:.01em;text-align:center;color:#fff}
+.hint{font-size:12px;color:#d2d7e4;line-height:1.55;margin:8px 0 14px;padding:12px;border:1px solid rgba(255,255,255,.18);border-radius:16px;background:rgba(255,255,255,.09);backdrop-filter:blur(12px)}
+.leg-group{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.22);border-radius:16px;padding:12px 12px 10px;margin-bottom:12px;backdrop-filter:blur(14px)}
+.leg-group h3{margin:0 0 8px;color:#1ed760;font-size:13px;text-transform:uppercase;letter-spacing:.09em}
+.row{display:flex;align-items:center;gap:6px;margin:7px 0}
+.row .ch{font:600 12px ui-monospace,monospace;color:#f7fbff;flex:0 0 44px}
+.row .joint{font-size:12px;color:#d2d7e4;flex:0 0 44px}
+.row input[type=range]{flex:1;accent-color:#1ed760;min-width:0}
+.row .us{font:12px ui-monospace,monospace;color:#d2d7e4;min-width:48px;text-align:right}
+.row button{padding:5px 8px;background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:999px;font-size:11px;cursor:pointer}
+.row button.w{background:#1db954;border-color:#1db954}
 .actions{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
-.actions button{flex:1;min-width:120px;padding:12px;background:#16213e;color:#fff;border:2px solid #1f2236;border-radius:8px;font-size:14px;cursor:pointer}
-.actions button.primary{background:#e94560;border-color:#e94560}
-.actions button.demo{background:#3a6;border-color:#3a6}
-pre#out{background:#0f1322;border:1px solid #1f2236;border-radius:8px;padding:10px;color:#a0e0a0;font:12px ui-monospace,monospace;overflow-x:auto;white-space:pre-wrap;display:none;margin-top:8px}
-.copy{display:none;margin-top:6px}
+.actions button{flex:1;min-width:120px;padding:12px;background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.26);border-radius:14px;font-size:14px;font-weight:600;cursor:pointer}
+.actions button.primary{background:#1db954;border-color:#1db954;color:#08140a}
+.actions button.demo{background:linear-gradient(135deg,#1ed760,#1aa34a);border-color:#1ed760;color:#08140a}
+pre#out{background:rgba(2,6,18,.72);border:1px solid rgba(255,255,255,.2);border-radius:14px;padding:10px;color:#b6f9c8;font:12px ui-monospace,monospace;overflow-x:auto;white-space:pre-wrap;display:none;margin-top:8px}
+.copy{display:none;margin-top:8px;padding:8px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff}
 </style></head><body>
 <h1>PetBot calibration</h1>
 <p class="hint">
@@ -117,6 +119,7 @@ pre#out{background:#0f1322;border:1px solid #1f2236;border-radius:8px;padding:10
 
 <div class="actions">
   <button class="primary" onclick="showHome()">Show home values</button>
+  <button class="demo" onclick="walk()">Walk cycle</button>
   <button class="demo" onclick="demo()">Wave demo</button>
   <button onclick="releaseAll()">Release all</button>
   <button onclick="centerAll()">All to 1500 µs</button>
@@ -169,6 +172,7 @@ build();
 function r(ch){fetch('/release?ch='+ch)}
 function wig(ch){fetch('/wiggle?ch='+ch)}
 function demo(){fetch('/demo_wave')}
+function walk(){fetch('/walk')}
 function releaseAll(){fetch('/release_all')}
 function centerAll(){
   document.querySelectorAll('input[type=range]').forEach(s=>{
@@ -279,6 +283,63 @@ static esp_err_t h_demo_wave(httpd_req_t* r) {
     return ESP_OK;
 }
 
+static inline uint16_t clamp_servo_pulse(int32_t us) {
+    if (us < 400) return 400;
+    if (us > 2600) return 2600;
+    return (uint16_t)us;
+}
+
+static inline bool leg_in_tripod(uint8_t leg, const uint8_t tripod[2]) {
+    return leg == tripod[0] || leg == tripod[1];
+}
+
+// Simple alternating-tripod walk demo:
+// step A lifts FL+BR, then step B lifts FR+BL.
+static esp_err_t h_walk(httpd_req_t* r) {
+    const uint8_t tripodA[2] = { 0, 3 }; // FL + BR
+    const uint8_t tripodB[2] = { 1, 2 }; // FR + BL
+    uint16_t hipHome[4], thighHome[4], calfHome[4];
+    for (uint8_t leg = 0; leg < 4; leg++) {
+        hipHome[leg] = s_us[HIP_CH[leg]];
+        thighHome[leg] = s_us[THIGH_CH[leg]];
+        calfHome[leg] = s_us[CALF_CH[leg]];
+    }
+
+    auto step = [&hipHome, &thighHome, &calfHome](const uint8_t active[2], int16_t activeHip, int16_t supportHip) {
+        for (uint8_t leg = 0; leg < 4; leg++) {
+            const bool lift = leg_in_tripod(leg, active);
+            const uint16_t hipBase = hipHome[leg];
+            const uint16_t thighBase = thighHome[leg];
+            const uint16_t calfBase = calfHome[leg];
+
+            const int16_t hipDelta = lift ? activeHip : supportHip;
+            const int16_t thighDelta = lift ? -90 : 45;
+            const int16_t calfDelta = lift ? 140 : -50;
+
+            servo_set_us(HIP_CH[leg], clamp_servo_pulse((int32_t)hipBase + hipDelta));
+            servo_set_us(THIGH_CH[leg], clamp_servo_pulse((int32_t)thighBase + thighDelta));
+            servo_set_us(CALF_CH[leg], clamp_servo_pulse((int32_t)calfBase + calfDelta));
+        }
+        // 260 ms keeps a visible but stable bench-test cadence for this gait.
+        delay(260);
+    };
+
+    Serial.println("[demo] walk cycle start");
+    for (uint8_t i = 0; i < 3; i++) {
+        step(tripodA, +130, -90);
+        step(tripodB, -130, +90);
+    }
+
+    for (uint8_t leg = 0; leg < 4; leg++) {
+        servo_set_us(HIP_CH[leg], hipHome[leg]);
+        servo_set_us(THIGH_CH[leg], thighHome[leg]);
+        servo_set_us(CALF_CH[leg], calfHome[leg]);
+    }
+    Serial.println("[demo] walk cycle end");
+    httpd_resp_sendstr(r, "ok walk");
+    return ESP_OK;
+}
+
 static esp_err_t h_home(httpd_req_t* r) {
     char buf[320]; int n = 0;
     n += snprintf(buf + n, sizeof(buf) - n, "{");
@@ -329,6 +390,7 @@ void setup() {
         { "/release",     HTTP_GET, h_release,     nullptr },
         { "/release_all", HTTP_GET, h_release_all, nullptr },
         { "/wiggle",      HTTP_GET, h_wiggle,      nullptr },
+        { "/walk",        HTTP_GET, h_walk,        nullptr },
         { "/demo_wave",   HTTP_GET, h_demo_wave,   nullptr },
         { "/home",        HTTP_GET, h_home,        nullptr },
     };
